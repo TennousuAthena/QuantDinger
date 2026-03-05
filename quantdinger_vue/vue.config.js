@@ -124,12 +124,18 @@ const vueConfig = {
   devServer: {
     // development server port 8000
     port: 8000,
+    host: '0.0.0.0',
+    allowedHosts: 'all',
     proxy: {
       '/api': {
-        target: 'http://localhost:5000',
+        target: 'http://backend:5000',
         ws: true,
-        changeOrigin: true
+        changeOrigin: true,
+        secure: false
       }
+    },
+    client: {
+      webSocketURL: 'auto://0.0.0.0:0/ws'
     }
   },
 
