@@ -82,7 +82,7 @@ app = create_app()
 def main():
     """启动应用"""
     # Keep startup messages ASCII-only and short.
-    print("QuantDinger Python API v2.0.0")
+    print("QuantDinger Python API v2.2.2")
     
     # Check demo mode status for debugging
     demo_status = os.getenv('IS_DEMO_MODE', 'false').lower()

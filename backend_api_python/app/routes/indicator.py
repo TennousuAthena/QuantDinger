@@ -57,7 +57,7 @@ def _extract_indicator_meta_from_code(code: str) -> Dict[str, str]:
 
 def _row_to_indicator(row: Dict[str, Any], user_id: int) -> Dict[str, Any]:
     """
-    Map SQLite row -> frontend expected indicator shape.
+    Map database row -> frontend expected indicator shape.
 
     Frontend uses:
     - id, name, description, code
@@ -185,7 +185,7 @@ def save_indicator():
         description = (data.get("description") or "").strip()
         publish_to_community = 1 if data.get("publishToCommunity") or data.get("publish_to_community") else 0
         pricing_type = (data.get("pricingType") or data.get("pricing_type") or "free").strip() or "free"
-        vip_free = 1 if (data.get("vipFree") or data.get("vip_free")) else 0
+        vip_free = bool(data.get("vipFree") or data.get("vip_free"))
         try:
             price = float(data.get("price") or 0)
         except Exception:
@@ -265,7 +265,7 @@ def save_indicator():
                         UPDATE qd_indicator_codes
                         SET name = ?, code = ?, description = ?,
                             publish_to_community = ?, pricing_type = ?, price = ?, preview_image = ?,
-                            vip_free = 0,
+                            vip_free = FALSE,
                             review_status = NULL, review_note = '', reviewed_at = NULL, reviewed_by = NULL,
                             updatetime = ?, updated_at = NOW()
                         WHERE id = ? AND user_id = ? AND (is_buy IS NULL OR is_buy = 0)

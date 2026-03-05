@@ -1,8 +1,11 @@
-name: Basic CI
+﻿name: Basic CI
 
-# Basic CI workflow for syntax and lint checks.
-# This workflow ensures the codebase has no syntax errors and passes linting.
+# Basic CI workflow for backend syntax and lint checks.
+# This workflow ensures the backend codebase has no syntax errors and passes linting.
 # It does NOT run tests, start servers, or require external services.
+#
+# Note: Frontend source code is in a separate private repository.
+# Frontend CI/CD is handled there. This repo only contains pre-built frontend assets.
 
 on:
   push:
@@ -72,70 +75,43 @@ jobs:
           # - Core module structure is intact
 
   frontend-check:
-    name: Frontend Syntax Check
+    name: Frontend Build Check
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          # Use Node.js 20 to meet dependency requirements (commander@14.0.0 requires Node >= 20)
-          # Note: Dockerfile uses Node 18, but dependencies require Node 20
-
-      - name: Install dependencies
-        working-directory: ./quantdinger_vue
-        env:
-          HUSKY: 0
-          # Disable husky in CI (git hooks are not needed in CI environment)
+      - name: Verify frontend dist exists
         run: |
-          # Project uses yarn (as specified in package.json packageManager field)
-          # Enable corepack to use the correct yarn version
-          corepack enable
-          # Configure yarn registry with fallback to mirror for better reliability
-          # Try official registry first, fallback to Taobao mirror if needed
-          yarn config set registry https://registry.npmjs.org/ || true
-          yarn config set network-timeout 300000 || true
-          # IMPORTANT: skip lifecycle scripts in CI to avoid running `prepare` (husky install),
-          # which fails because `.git` is not present in GitHub Actions checkouts by default.
-          # Retry logic: try up to 3 times with exponential backoff
-          max_retries=3
-          retry_count=0
-          while [ $retry_count -lt $max_retries ]; do
-            if yarn install --frozen-lockfile --ignore-scripts; then
-              echo "✓ Dependencies installed successfully"
-              break
-            else
-              retry_count=$((retry_count + 1))
-              if [ $retry_count -lt $max_retries ]; then
-                echo "⚠ Install failed, retrying ($retry_count/$max_retries)..."
-                # Switch to Taobao mirror on retry for better reliability in China/network issues
-                if [ $retry_count -eq 2 ]; then
-                  echo "Switching to Taobao mirror for retry..."
-                  yarn config set registry https://registry.npmmirror.com/ || true
-                fi
-                sleep $((retry_count * 5))
-              else
-                echo "✗ Failed to install dependencies after $max_retries attempts"
-                exit 1
-              fi
-            fi
-          done
-          # Use --frozen-lockfile for reproducible installs. Use --ignore-scripts to keep CI non-intrusive.
+          # Since frontend source is in a private repo, we only verify
+          # that the pre-built frontend assets are present and valid
+          echo "Checking frontend dist directory..."
+          if [ -d "frontend/dist" ] && [ "$(ls -A frontend/dist 2>/dev/null)" ]; then
+            echo "✓ frontend/dist/ exists and is not empty"
+            echo "Files found:"
+            find frontend/dist -type f | head -20
+          else
+            echo "⚠ frontend/dist/ is empty or missing"
+            echo "This is expected for initial setup. Run build-frontend.sh or wait for CI to populate it."
+          fi
 
-      - name: Frontend lint check
-        working-directory: ./quantdinger_vue
+      - name: Verify Nginx config
         run: |
-          # Run ESLint to check JavaScript/Vue syntax and code quality
-          # Using --no-fix to ensure we only check, not modify code
-          npm run lint:nofix
-          # This will FAIL if:
-          # - JavaScript/Vue syntax errors exist
-          # - ESLint rules are violated
-          # This will PASS if:
-          # - Code is syntactically valid
-          # - Code passes ESLint rules
+          echo "Checking Nginx configuration..."
+          if [ -f "frontend/nginx.conf" ]; then
+            echo "✓ frontend/nginx.conf exists"
+          else
+            echo "✗ frontend/nginx.conf is missing!"
+            exit 1
+          fi
 
+      - name: Verify Dockerfile
+        run: |
+          echo "Checking frontend Dockerfile..."
+          if [ -f "frontend/Dockerfile" ]; then
+            echo "✓ frontend/Dockerfile exists"
+          else
+            echo "✗ frontend/Dockerfile is missing!"
+            exit 1
+          fi

@@ -5,7 +5,7 @@ Goal:
 - Create one indicator strategy using `indicator_python_code/code_test.py`
 - Inject deterministic K-lines and a deterministic tick-price sequence
 - Run TradingExecutor for a short period
-- Verify orders are enqueued into SQLite table `pending_orders`
+- Verify orders are enqueued into PostgreSQL table `pending_orders`
 
 Notes:
 - This is a local-only test helper. It does NOT talk to real exchanges.

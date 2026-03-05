@@ -4,6 +4,131 @@ This document records version updates, new features, bug fixes, and database mig
 
 ---
 
+## V2.2.2 (2026-02-28)
+
+### 🚀 New Features
+
+#### Polymarket Prediction Markets Integration 🔮
+- **Prediction Market Analysis**: Integrated Polymarket prediction markets as a new data source for AI analysis
+- **AI-Driven Insights**: AI analyzes prediction market events and compares AI predictions with market consensus
+- **Opportunity Discovery**: Identifies undervalued prediction opportunities with AI vs market divergence analysis
+- **Asset Trading Recommendations**: Links prediction market events to related asset trading opportunities (e.g., BTC/USDT, ETH/USDT)
+- **Data Analysis Only**: Focuses on data analysis and trading opportunity recommendations without live trading
+- **Frontend Pages**: New `/polymarket` page with market listings, filtering, sorting, and search functionality
+- **Market Detail View**: Comprehensive analysis view showing market info, AI analysis results, and related asset opportunities
+- **AI Trading Radar Integration**: Prediction market opportunities appear in the AI Trading Radar alongside Crypto, US Stocks, and Forex
+
+### 🐛 Bug Fixes
+- Fixed duplicate `common.refresh` key in internationalization files (`zh-CN.js` and `en-US.js`)
+- Fixed OKX position `entry_price` extraction (now correctly reads `avgPx`, `avgPxEp`, or `last` from position data)
+- Improved symbol normalization across all exchanges to handle edge cases (e.g., PI, TRX without quote currency)
+- Enhanced LLM provider fallback mechanism to handle 403/402/404/429 errors automatically
+
+### 🎨 UI/UX Improvements
+- Added Polymarket market cards with AI analysis summaries and opportunity scores
+- Enhanced AI Trading Radar to display prediction market opportunities with distinct styling
+- Improved symbol selector in Quick Trade panel with watchlist integration
+
+### 📋 Database Migration
+
+**Run the following SQL on your PostgreSQL database before deploying V2.2.2:**
+
+```sql
+-- ============================================================
+-- QuantDinger V2.2.2 Database Migration
+-- Polymarket Prediction Markets Integration
+-- ============================================================
+
+-- 预测市场表（缓存）
+CREATE TABLE IF NOT EXISTS qd_polymarket_markets (
+    id SERIAL PRIMARY KEY,
+    market_id VARCHAR(255) UNIQUE NOT NULL,
+    question TEXT,
+    category VARCHAR(100),  -- crypto, politics, economics, sports
+    current_probability DECIMAL(5,2),  -- YES概率（0-100）
+    volume_24h DECIMAL(20,2),
+    liquidity DECIMAL(20,2),
+    end_date_iso TIMESTAMP,
+    status VARCHAR(50),  -- active, closed, resolved
+    outcome_tokens JSONB,  -- YES/NO价格和交易量
+    slug VARCHAR(255),  -- Polymarket事件slug，用于构建URL
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- 添加slug字段（如果表已存在但字段不存在）
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'qd_polymarket_markets' AND column_name = 'slug'
+    ) THEN
+        ALTER TABLE qd_polymarket_markets ADD COLUMN slug VARCHAR(255);
+        RAISE NOTICE 'Added slug column to qd_polymarket_markets';
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_polymarket_category ON qd_polymarket_markets(category);
+CREATE INDEX IF NOT EXISTS idx_polymarket_status ON qd_polymarket_markets(status);
+CREATE INDEX IF NOT EXISTS idx_polymarket_updated ON qd_polymarket_markets(updated_at DESC);
+
+-- AI分析记录表
+CREATE TABLE IF NOT EXISTS qd_polymarket_ai_analysis (
+    id SERIAL PRIMARY KEY,
+    market_id VARCHAR(255) NOT NULL,
+    user_id INTEGER,  -- 可选：用户特定的分析
+    ai_predicted_probability DECIMAL(5,2),
+    market_probability DECIMAL(5,2),
+    divergence DECIMAL(5,2),  -- AI - 市场
+    recommendation VARCHAR(20),  -- YES/NO/HOLD
+    confidence_score DECIMAL(5,2),
+    opportunity_score DECIMAL(5,2),
+    reasoning TEXT,
+    key_factors JSONB,
+    related_assets TEXT[],  -- 相关资产列表
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_polymarket_analysis_market ON qd_polymarket_ai_analysis(market_id);
+CREATE INDEX IF NOT EXISTS idx_polymarket_analysis_opportunity ON qd_polymarket_ai_analysis(opportunity_score DESC);
+CREATE INDEX IF NOT EXISTS idx_polymarket_analysis_user ON qd_polymarket_ai_analysis(user_id);
+
+-- 资产交易机会表（基于预测市场生成）
+CREATE TABLE IF NOT EXISTS qd_polymarket_asset_opportunities (
+    id SERIAL PRIMARY KEY,
+    market_id VARCHAR(255) NOT NULL,
+    asset_symbol VARCHAR(100),
+    asset_market VARCHAR(50),
+    signal VARCHAR(20),  -- BUY/SELL/HOLD
+    confidence DECIMAL(5,2),
+    reasoning TEXT,
+    entry_suggestion JSONB,  -- 入场建议
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_polymarket_opp_market ON qd_polymarket_asset_opportunities(market_id);
+CREATE INDEX IF NOT EXISTS idx_polymarket_opp_asset ON qd_polymarket_asset_opportunities(asset_symbol, asset_market);
+
+-- Migration Complete
+DO $$
+BEGIN
+    RAISE NOTICE '✅ QuantDinger V2.2.2 database migration completed!';
+END $$;
+```
+
+**Migration Notes:**
+- All statements use `IF NOT EXISTS` — safe to run multiple times
+- No existing data is modified or deleted
+- New tables are created for Polymarket data caching and AI analysis
+- Polymarket integration is read-only (data analysis only, no live trading)
+
+### 📝 Configuration Notes
+- No new environment variables required for basic Polymarket integration
+- Polymarket data source uses placeholder/dummy data by default (can be extended with actual API integration)
+- AI analysis leverages existing LLM configuration from System Settings
+
+---
+
 ## V2.2.1 (2026-02-27)
 
 ### 🚀 New Features
@@ -42,11 +167,27 @@ This document records version updates, new features, bug fixes, and database mig
 - **Market Order Default**: Changed default order mode to market order for reliable execution
 - **Billing Config i18n**: All billing configuration items fully multi-language supported
 
+#### Quick Trade Panel (闪电交易) 🆕
+- **Side-Sliding Drawer**: Professional trading panel slides in from the right, allowing instant order placement without leaving the analysis page
+- **Multi-Exchange Support**: Select from saved exchange credentials (Binance, OKX, Bitget, Bybit, etc.) with real-time balance display
+- **Long/Short Toggle**: Color-coded direction buttons with one-click switching
+- **Market / Limit Orders**: Toggle between market and limit order types; limit orders accept a specific price
+- **Leverage Slider**: Interactive 1x–125x leverage control for futures trading
+- **TP/SL Price Setting**: Optional take-profit and stop-loss by **absolute price** (not percentage)
+- **Current Position Display**: Shows open position with side, size, entry price, unrealized PnL, and one-click close button
+- **Recent Trade History**: Displays last 5 quick trades with status tags
+- **AI Radar Integration**: "Trade Now" button on each AI Trading Opportunities card pre-fills symbol, direction, and price
+- **Indicator Analysis Integration**: Quick Trade button in chart header and floating ⚡ button pre-fills current symbol and price
+- **Auto-Polling**: Balance and position data refresh every 10 seconds
+- **Full Dark Theme**: Complete dark mode support for all panel elements
+- **Multi-Language**: All labels and messages fully internationalized (zh-CN / en-US)
+
 #### Indicator Market Performance Tracking
 - **Live Performance Data**: Fixed aggregation to correctly parse backtest `result_json` and include live trade data
 - **Combined Metrics**: Backtest return, live PnL, and win rate now properly displayed on indicator cards
 
 ### 🐛 Bug Fixes
+- Fixed `quick_trade.py` importing from non-existent `auth_utils` module (corrected to `auth`)
 - Fixed "Live Performance" data showing all zeros in Indicator Market (incorrect SQL query referencing non-existent columns)
 - Fixed incorrect entry price display in Position Records (was falling back to current price)
 - Fixed inaccurate System Overview statistics for running strategies, total capital, and total PnL
@@ -147,6 +288,34 @@ CREATE TABLE IF NOT EXISTS qd_usdt_orders (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_usdt_orders_address_unique ON qd_usdt_orders(chain, address);
 CREATE INDEX IF NOT EXISTS idx_usdt_orders_user_id ON qd_usdt_orders(user_id);
 CREATE INDEX IF NOT EXISTS idx_usdt_orders_status ON qd_usdt_orders(status);
+
+-- 5. Quick Trades table (manual / discretionary orders from Quick Trade Panel)
+CREATE TABLE IF NOT EXISTS qd_quick_trades (
+    id              SERIAL PRIMARY KEY,
+    user_id         INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE CASCADE,
+    credential_id   INTEGER DEFAULT 0,
+    exchange_id     VARCHAR(40) NOT NULL DEFAULT '',
+    symbol          VARCHAR(60) NOT NULL DEFAULT '',
+    side            VARCHAR(10) NOT NULL DEFAULT '',       -- buy / sell
+    order_type      VARCHAR(20) NOT NULL DEFAULT 'market', -- market / limit
+    amount          DECIMAL(24, 8) DEFAULT 0,
+    price           DECIMAL(24, 8) DEFAULT 0,
+    leverage        INTEGER DEFAULT 1,
+    market_type     VARCHAR(20) DEFAULT 'swap',            -- swap / spot
+    tp_price        DECIMAL(24, 8) DEFAULT 0,
+    sl_price        DECIMAL(24, 8) DEFAULT 0,
+    status          VARCHAR(20) DEFAULT 'submitted',       -- submitted / filled / failed / cancelled
+    exchange_order_id VARCHAR(120) DEFAULT '',
+    filled_amount   DECIMAL(24, 8) DEFAULT 0,
+    avg_fill_price  DECIMAL(24, 8) DEFAULT 0,
+    error_msg       TEXT DEFAULT '',
+    source          VARCHAR(40) DEFAULT 'manual',          -- ai_radar / ai_analysis / indicator / manual
+    raw_result      JSONB,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_quick_trades_user    ON qd_quick_trades(user_id);
+CREATE INDEX IF NOT EXISTS idx_quick_trades_created ON qd_quick_trades(created_at DESC);
 
 -- Migration Complete
 DO $$
@@ -596,6 +765,7 @@ END $$;
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| V2.2.2 | 2026-02-28 | Polymarket prediction markets integration, AI-driven prediction analysis, asset trading recommendations |
 | V2.2.1 | 2026-02-27 | Membership & Billing, USDT TRC20 payment, VIP free indicators, AI Trading Radar, simplified strategy creation |
 | V2.1.3 | 2026-02-XX | Cross-sectional strategy support |
 | V2.1.2 | 2026-02-01 | Indicator parameters, cross-indicator calling |

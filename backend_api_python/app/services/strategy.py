@@ -549,6 +549,12 @@ class StrategyService:
         trading_config = payload.get('trading_config') or {}
         exchange_config = payload.get('exchange_config') or {}
 
+        # When credential_id is present, strip raw API keys to avoid
+        # storing secrets in the strategy record — they live in qd_exchange_credentials.
+        if isinstance(exchange_config, dict) and exchange_config.get('credential_id'):
+            for _secret_key in ('api_key', 'secret_key', 'passphrase', 'apiKey', 'secret', 'password'):
+                exchange_config.pop(_secret_key, None)
+
         # Strategy group fields
         strategy_group_id = payload.get('strategy_group_id') or ''
         group_base_name = payload.get('group_base_name') or ''
@@ -779,7 +785,13 @@ class StrategyService:
         trading_config = payload.get('trading_config') if payload.get('trading_config') is not None else (existing.get('trading_config') or {})
         exchange_config = payload.get('exchange_config') if payload.get('exchange_config') is not None else (existing.get('exchange_config') or {})
         ai_model_config = payload.get('ai_model_config') if payload.get('ai_model_config') is not None else (existing.get('ai_model_config') or {})
-        
+
+        # When credential_id is present, strip raw API keys to avoid
+        # storing secrets in the strategy record — they live in qd_exchange_credentials.
+        if isinstance(exchange_config, dict) and exchange_config.get('credential_id'):
+            for _secret_key in ('api_key', 'secret_key', 'passphrase', 'apiKey', 'secret', 'password'):
+                exchange_config.pop(_secret_key, None)
+
         # Handle cross-sectional strategy config updates
         if payload.get('cs_strategy_type') is not None:
             trading_config['cs_strategy_type'] = payload.get('cs_strategy_type')

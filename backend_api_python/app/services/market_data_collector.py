@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 
 import yfinance as yf
+import pandas as pd
 
 from app.data_sources import DataSourceFactory
 from app.services.kline import KlineService
@@ -73,6 +74,7 @@ class MarketDataCollector:
         timeframe: str = "1D",
         include_macro: bool = True,
         include_news: bool = True,
+        include_polymarket: bool = True,  # 新增：是否包含预测市场数据
         timeout: int = 30
     ) -> Dict[str, Any]:
         """
@@ -84,6 +86,7 @@ class MarketDataCollector:
             timeframe: K线周期
             include_macro: 是否包含宏观数据
             include_news: 是否包含新闻
+            include_polymarket: 是否包含预测市场数据
             timeout: 总超时时间(秒)
             
         Returns:
@@ -108,6 +111,8 @@ class MarketDataCollector:
             # 情绪
             "news": [],
             "sentiment": {},
+            # 预测市场
+            "polymarket": [],
             # 元数据
             "_meta": {
                 "success_items": [],
@@ -179,6 +184,17 @@ class MarketDataCollector:
             except Exception as e:
                 logger.warning(f"News fetch failed: {e}")
                 data["_meta"]["failed_items"].append("news")
+        
+        # === 阶段4: 预测市场数据 (如果需要) ===
+        if include_polymarket:
+            try:
+                polymarket_events = self._get_polymarket_events(symbol, market)
+                data["polymarket"] = polymarket_events
+                if polymarket_events:
+                    data["_meta"]["success_items"].append("polymarket")
+            except Exception as e:
+                logger.debug(f"Polymarket data fetch failed: {e}")
+                data["_meta"]["failed_items"].append("polymarket")
         
         # 记录总耗时
         data["_meta"]["duration_ms"] = int((time.time() - start_time) * 1000)
@@ -552,10 +568,13 @@ class MarketDataCollector:
         return None
     
     def _get_us_fundamental(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """美股基本面 - Finnhub + yfinance"""
+        """
+        美股基本面 - Finnhub + yfinance
+        包括：基础财务指标 + 财报数据（资产负债表、利润表、现金流量表）
+        """
         result = {}
         
-        # Finnhub
+        # === 1. 基础财务指标 (Finnhub) ===
         if self._finnhub_client:
             try:
                 metrics = self._finnhub_client.company_basic_financials(symbol, 'all')
@@ -573,30 +592,192 @@ class MarketDataCollector:
                         'roe': m.get('roeTTM'),
                         'eps': m.get('epsBasicExclExtraItemsTTM'),
                         'revenue_growth': m.get('revenueGrowthTTMYoy'),
+                        'profit_margin': m.get('netProfitMarginTTM'),
+                        'debt_to_equity': m.get('totalDebtToEquityQuarterly'),
+                        'current_ratio': m.get('currentRatioQuarterly'),
+                        'quick_ratio': m.get('quickRatioQuarterly'),
                     })
             except Exception as e:
                 logger.debug(f"Finnhub fundamental failed for {symbol}: {e}")
         
-        # yfinance 补充
-        if not result:
-            try:
-                ticker = yf.Ticker(symbol)
-                info = ticker.info or {}
-                result.update({
-                    'pe_ratio': info.get('trailingPE') or info.get('forwardPE'),
-                    'pb_ratio': info.get('priceToBook'),
-                    'market_cap': info.get('marketCap'),
-                    'dividend_yield': info.get('dividendYield'),
-                    'beta': info.get('beta'),
-                    '52w_high': info.get('fiftyTwoWeekHigh'),
-                    '52w_low': info.get('fiftyTwoWeekLow'),
-                    'roe': info.get('returnOnEquity'),
-                    'eps': info.get('trailingEps'),
-                })
-            except Exception as e:
-                logger.debug(f"yfinance fundamental failed for {symbol}: {e}")
+        # === 2. yfinance 补充基础指标 ===
+        try:
+            ticker = yf.Ticker(symbol)
+            info = ticker.info or {}
+            
+            # 补充缺失的基础指标
+            if not result.get('pe_ratio'):
+                result['pe_ratio'] = info.get('trailingPE') or info.get('forwardPE')
+            if not result.get('pb_ratio'):
+                result['pb_ratio'] = info.get('priceToBook')
+            if not result.get('market_cap'):
+                result['market_cap'] = info.get('marketCap')
+            if not result.get('dividend_yield'):
+                result['dividend_yield'] = info.get('dividendYield')
+            if not result.get('beta'):
+                result['beta'] = info.get('beta')
+            if not result.get('52w_high'):
+                result['52w_high'] = info.get('fiftyTwoWeekHigh')
+            if not result.get('52w_low'):
+                result['52w_low'] = info.get('fiftyTwoWeekLow')
+            if not result.get('roe'):
+                result['roe'] = info.get('returnOnEquity')
+            if not result.get('eps'):
+                result['eps'] = info.get('trailingEps')
+            
+            # 补充更多财务指标
+            result.update({
+                'revenue': info.get('totalRevenue'),
+                'gross_profit': info.get('grossProfits'),
+                'operating_margin': info.get('operatingMargins'),
+                'profit_margin': result.get('profit_margin') or info.get('profitMargins'),
+                'ebitda': info.get('ebitda'),
+                'debt': info.get('totalDebt'),
+                'cash': info.get('totalCash'),
+                'free_cash_flow': info.get('freeCashflow'),
+                'operating_cash_flow': info.get('operatingCashflow'),
+                'book_value': info.get('bookValue'),
+                'enterprise_value': info.get('enterpriseValue'),
+            })
+        except Exception as e:
+            logger.debug(f"yfinance fundamental failed for {symbol}: {e}")
+        
+        # === 3. 获取财报数据（资产负债表、利润表、现金流量表）===
+        financial_statements = self._get_financial_statements(symbol)
+        if financial_statements:
+            result['financial_statements'] = financial_statements
+        
+        # === 4. 获取盈利报告（Earnings）===
+        earnings_data = self._get_earnings_data(symbol)
+        if earnings_data:
+            result['earnings'] = earnings_data
         
         return result if result else None
+    
+    def _get_financial_statements(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        获取财务报表数据（资产负债表、利润表、现金流量表）
+        
+        使用 yfinance 获取，包含最近几个季度的数据
+        """
+        try:
+            ticker = yf.Ticker(symbol)
+            statements = {}
+            
+            # 资产负债表 (Balance Sheet)
+            try:
+                balance_sheet = ticker.balance_sheet
+                if balance_sheet is not None and not balance_sheet.empty:
+                    # 获取最近4个季度
+                    latest_quarters = balance_sheet.columns[:4] if len(balance_sheet.columns) >= 4 else balance_sheet.columns
+                    statements['balance_sheet'] = {
+                        'latest_date': str(latest_quarters[0]) if len(latest_quarters) > 0 else None,
+                        'total_assets': float(balance_sheet.loc['Total Assets', latest_quarters[0]]) if 'Total Assets' in balance_sheet.index and len(latest_quarters) > 0 else None,
+                        'total_liabilities': float(balance_sheet.loc['Total Liab', latest_quarters[0]]) if 'Total Liab' in balance_sheet.index and len(latest_quarters) > 0 else None,
+                        'total_equity': float(balance_sheet.loc['Stockholders Equity', latest_quarters[0]]) if 'Stockholders Equity' in balance_sheet.index and len(latest_quarters) > 0 else None,
+                        'cash': float(balance_sheet.loc['Cash', latest_quarters[0]]) if 'Cash' in balance_sheet.index and len(latest_quarters) > 0 else None,
+                        'debt': float(balance_sheet.loc['Total Debt', latest_quarters[0]]) if 'Total Debt' in balance_sheet.index and len(latest_quarters) > 0 else None,
+                        'current_assets': float(balance_sheet.loc['Current Assets', latest_quarters[0]]) if 'Current Assets' in balance_sheet.index and len(latest_quarters) > 0 else None,
+                        'current_liabilities': float(balance_sheet.loc['Current Liabilities', latest_quarters[0]]) if 'Current Liabilities' in balance_sheet.index and len(latest_quarters) > 0 else None,
+                    }
+            except Exception as e:
+                logger.debug(f"Balance sheet fetch failed for {symbol}: {e}")
+            
+            # 利润表 (Income Statement)
+            try:
+                income_stmt = ticker.financials
+                if income_stmt is not None and not income_stmt.empty:
+                    latest_quarters = income_stmt.columns[:4] if len(income_stmt.columns) >= 4 else income_stmt.columns
+                    statements['income_statement'] = {
+                        'latest_date': str(latest_quarters[0]) if len(latest_quarters) > 0 else None,
+                        'total_revenue': float(income_stmt.loc['Total Revenue', latest_quarters[0]]) if 'Total Revenue' in income_stmt.index and len(latest_quarters) > 0 else None,
+                        'gross_profit': float(income_stmt.loc['Gross Profit', latest_quarters[0]]) if 'Gross Profit' in income_stmt.index and len(latest_quarters) > 0 else None,
+                        'operating_income': float(income_stmt.loc['Operating Income', latest_quarters[0]]) if 'Operating Income' in income_stmt.index and len(latest_quarters) > 0 else None,
+                        'net_income': float(income_stmt.loc['Net Income', latest_quarters[0]]) if 'Net Income' in income_stmt.index and len(latest_quarters) > 0 else None,
+                        'eps': float(income_stmt.loc['Basic EPS', latest_quarters[0]]) if 'Basic EPS' in income_stmt.index and len(latest_quarters) > 0 else None,
+                    }
+            except Exception as e:
+                logger.debug(f"Income statement fetch failed for {symbol}: {e}")
+            
+            # 现金流量表 (Cash Flow Statement)
+            try:
+                cashflow = ticker.cashflow
+                if cashflow is not None and not cashflow.empty:
+                    latest_quarters = cashflow.columns[:4] if len(cashflow.columns) >= 4 else cashflow.columns
+                    statements['cash_flow'] = {
+                        'latest_date': str(latest_quarters[0]) if len(latest_quarters) > 0 else None,
+                        'operating_cash_flow': float(cashflow.loc['Operating Cash Flow', latest_quarters[0]]) if 'Operating Cash Flow' in cashflow.index and len(latest_quarters) > 0 else None,
+                        'investing_cash_flow': float(cashflow.loc['Capital Expenditure', latest_quarters[0]]) if 'Capital Expenditure' in cashflow.index and len(latest_quarters) > 0 else None,
+                        'financing_cash_flow': float(cashflow.loc['Financing Cash Flow', latest_quarters[0]]) if 'Financing Cash Flow' in cashflow.index and len(latest_quarters) > 0 else None,
+                        'free_cash_flow': float(cashflow.loc['Free Cash Flow', latest_quarters[0]]) if 'Free Cash Flow' in cashflow.index and len(latest_quarters) > 0 else None,
+                    }
+            except Exception as e:
+                logger.debug(f"Cash flow statement fetch failed for {symbol}: {e}")
+            
+            return statements if statements else None
+            
+        except Exception as e:
+            logger.debug(f"Financial statements fetch failed for {symbol}: {e}")
+            return None
+    
+    def _get_earnings_data(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        获取盈利报告数据（Earnings）
+        
+        包括：历史盈利、盈利预测、盈利日期等
+        """
+        try:
+            ticker = yf.Ticker(symbol)
+            earnings_data = {}
+            
+            # 历史盈利数据
+            try:
+                earnings_history = ticker.earnings_history
+                if earnings_history is not None and not earnings_history.empty:
+                    # 获取最近4个季度
+                    recent_earnings = earnings_history.head(4)
+                    earnings_data['history'] = []
+                    for _, row in recent_earnings.iterrows():
+                        earnings_data['history'].append({
+                            'date': str(row.get('Date', '')),
+                            'eps_actual': float(row.get('EPS Actual', 0)) if row.get('EPS Actual') is not None else None,
+                            'eps_estimate': float(row.get('EPS Estimate', 0)) if row.get('EPS Estimate') is not None else None,
+                            'surprise': float(row.get('Surprise(%)', 0)) if row.get('Surprise(%)') is not None else None,
+                        })
+            except Exception as e:
+                logger.debug(f"Earnings history fetch failed for {symbol}: {e}")
+            
+            # 盈利日历（未来盈利日期）
+            try:
+                earnings_calendar = ticker.calendar
+                if earnings_calendar is not None and not earnings_calendar.empty:
+                    earnings_data['upcoming'] = {
+                        'next_earnings_date': str(earnings_calendar.index[0]) if len(earnings_calendar.index) > 0 else None,
+                        'eps_estimate': float(earnings_calendar.loc[earnings_calendar.index[0], 'Earnings Estimate']) if len(earnings_calendar.index) > 0 and 'Earnings Estimate' in earnings_calendar.columns else None,
+                        'revenue_estimate': float(earnings_calendar.loc[earnings_calendar.index[0], 'Revenue Estimate']) if len(earnings_calendar.index) > 0 and 'Revenue Estimate' in earnings_calendar.columns else None,
+                    }
+            except Exception as e:
+                logger.debug(f"Earnings calendar fetch failed for {symbol}: {e}")
+            
+            # 季度盈利数据
+            try:
+                quarterly_earnings = ticker.quarterly_earnings
+                if quarterly_earnings is not None and not quarterly_earnings.empty:
+                    latest_q = quarterly_earnings.index[0] if len(quarterly_earnings.index) > 0 else None
+                    if latest_q:
+                        earnings_data['quarterly'] = {
+                            'latest_quarter': str(latest_q),
+                            'revenue': float(quarterly_earnings.loc[latest_q, 'Revenue']) if 'Revenue' in quarterly_earnings.columns else None,
+                            'earnings': float(quarterly_earnings.loc[latest_q, 'Earnings']) if 'Earnings' in quarterly_earnings.columns else None,
+                        }
+            except Exception as e:
+                logger.debug(f"Quarterly earnings fetch failed for {symbol}: {e}")
+            
+            return earnings_data if earnings_data else None
+            
+        except Exception as e:
+            logger.debug(f"Earnings data fetch failed for {symbol}: {e}")
+            return None
     
     def _get_crypto_info(self, symbol: str) -> Optional[Dict[str, Any]]:
         """加密货币信息 (固定描述为主)"""
@@ -879,6 +1060,13 @@ class MarketDataCollector:
             search_news = self._get_news_from_search(market, symbol, company_name)
             news_list.extend(search_news)
         
+        # === 4) 获取全球重大事件新闻（地缘政治、战争等） ===
+        # 这些事件会影响所有市场，特别是加密货币
+        global_events = self._get_global_major_events()
+        if global_events:
+            news_list.extend(global_events)
+            logger.info(f"Added {len(global_events)} global major events to news list")
+        
         # 去重（按标题）
         seen_titles = set()
         unique_news = []
@@ -939,6 +1127,203 @@ class MarketDataCollector:
             logger.debug(f"搜索引擎新闻获取失败: {e}")
         
         return news_list
+    
+    def _get_global_major_events(self) -> List[Dict]:
+        """
+        获取全球重大事件新闻（地缘政治、战争、重大政策等）
+        这些事件会影响所有市场，特别是加密货币
+        
+        Returns:
+            全球重大事件新闻列表
+        """
+        news_list = []
+        
+        try:
+            from app.services.search import get_search_service
+            search_service = get_search_service()
+            
+            if not search_service.is_available:
+                return news_list
+            
+            # 搜索全球重大事件（最近24小时）
+            # 优化：减少搜索次数，只搜索最重要的查询
+            global_event_queries = [
+                "war conflict breaking news today"  # 只搜索最重要的查询，减少API调用
+            ]
+            
+            for query in global_event_queries:
+                try:
+                    response = search_service.search_with_fallback(
+                        query=query,
+                        max_results=2,
+                        days=1  # 只搜索最近1天的新闻
+                    )
+                    
+                    if response.success and response.results:
+                        for result in response.results:
+                            # 检查是否是重大事件（包含关键词）
+                            title_lower = result.title.lower()
+                            snippet_lower = (result.snippet or "").lower()
+                            text = f"{title_lower} {snippet_lower}"
+                            
+                            # 重大事件关键词
+                            major_event_keywords = [
+                                "war", "conflict", "military", "attack", "strike", "sanctions",
+                                "geopolitical", "crisis", "tension", "iran", "israel", "russia",
+                                "ukraine", "middle east", "nato", "united states",
+                                "战争", "冲突", "军事", "袭击", "制裁", "地缘政治", "危机"
+                            ]
+                            
+                            if any(keyword in text for keyword in major_event_keywords):
+                                news_list.append({
+                                    "datetime": result.published_date or datetime.now().strftime('%Y-%m-%d %H:%M'),
+                                    "headline": result.title,
+                                    "summary": result.snippet[:300] if result.snippet else '',
+                                    "source": f"全球事件:{result.source}",
+                                    "url": result.url,
+                                    "sentiment": "negative" if any(kw in text for kw in ["war", "conflict", "attack", "战争", "冲突", "袭击"]) else "neutral",
+                                    "is_global_event": True  # 标记为全球事件
+                                })
+                                logger.info(f"Found global major event: {result.title[:60]}")
+                except Exception as e:
+                    logger.debug(f"Failed to search global events with query '{query}': {e}")
+                    continue
+            
+            # 去重
+            seen_titles = set()
+            unique_events = []
+            for item in news_list:
+                title = item.get('headline', '')
+                if title and title not in seen_titles:
+                    seen_titles.add(title)
+                    unique_events.append(item)
+            
+            return unique_events[:5]  # 最多返回5条全球重大事件
+            
+        except Exception as e:
+            logger.debug(f"Failed to get global major events: {e}")
+            return []
+    
+    def _get_polymarket_events(self, symbol: str, market: str) -> List[Dict]:
+        """
+        获取与资产相关的预测市场事件
+        直接调用Polymarket API获取实时数据，不依赖本地数据库
+        
+        Args:
+            symbol: 资产符号
+            market: 市场类型
+            
+        Returns:
+            相关预测市场事件列表
+        """
+        try:
+            from app.data_sources.polymarket import PolymarketDataSource
+            
+            polymarket_source = PolymarketDataSource()
+            
+            # 提取关键词
+            keywords = self._extract_polymarket_keywords(symbol, market)
+            logger.info(f"Extracted Polymarket keywords for {symbol}: {keywords}")
+            
+            # 优化：使用缓存加速，减少API调用时间
+            # 对于AI分析，使用短期缓存（5分钟）即可，既保证时效性又提升性能
+            # 进一步优化：限制关键词数量，只搜索最重要的关键词（最多2个）
+            related_markets = []
+            max_keywords = 2  # 最多只搜索2个关键词，减少API调用
+            for keyword in keywords[:max_keywords]:
+                try:
+                    # 使用use_cache=True启用缓存，减少API调用时间
+                    markets = polymarket_source.search_markets(keyword, limit=5, use_cache=True)
+                    logger.info(f"Found {len(markets)} markets for keyword '{keyword}' (cached)")
+                    related_markets.extend(markets)
+                except Exception as e:
+                    logger.warning(f"Failed to search Polymarket for keyword '{keyword}': {e}")
+                    continue
+            
+            # 去重
+            seen = set()
+            result = []
+            for market_data in related_markets:
+                market_id = market_data.get('market_id')
+                if market_id and market_id not in seen:
+                    seen.add(market_id)
+                    # 构建正确的 Polymarket URL
+                    # 优先使用已有的 polymarket_url，如果没有则根据 slug 或 market_id 构建
+                    polymarket_url = market_data.get('polymarket_url')
+                    if not polymarket_url:
+                        slug = market_data.get('slug')
+                        if slug and not str(slug).isdigit() and ('-' in str(slug) or any(c.isalpha() for c in str(slug))):
+                            # 使用有效的 slug
+                            polymarket_url = f"https://polymarket.com/event/{slug}"
+                        else:
+                            # 使用 markets 端点（更可靠）
+                            polymarket_url = f"https://polymarket.com/markets/{market_id}"
+                    
+                    result.append({
+                        "market_id": market_id,
+                        "question": market_data.get('question', ''),
+                        "current_probability": market_data.get('current_probability', 50.0),
+                        "volume_24h": market_data.get('volume_24h', 0),
+                        "liquidity": market_data.get('liquidity', 0),
+                        "category": market_data.get('category', 'other'),
+                        "polymarket_url": polymarket_url
+                    })
+            
+            logger.info(f"Total {len(result)} unique Polymarket events found for {symbol}")
+            return result
+        except Exception as e:
+            logger.debug(f"Failed to get polymarket events for {symbol}: {e}")
+            return []
+    
+    def _extract_polymarket_keywords(self, symbol: str, market: str) -> List[str]:
+        """
+        提取用于搜索预测市场的关键词
+        优化：只保留最重要的关键词，减少API调用次数
+        """
+        keywords = []
+        
+        # 基础符号（最重要）
+        if '/' in symbol:
+            base = symbol.split('/')[0]
+            keywords.append(base)
+        else:
+            keywords.append(symbol)
+        
+        # 加密货币全名映射（只保留一个最重要的全名，避免重复）
+        crypto_names = {
+            'BTC': 'Bitcoin',
+            'ETH': 'Ethereum',
+            'SOL': 'Solana',
+            'BNB': 'Binance',
+            'XRP': 'Ripple',
+            'ADA': 'Cardano',
+            'DOGE': 'Dogecoin',
+            'AVAX': 'Avalanche',
+            'DOT': 'Polkadot',
+            'MATIC': 'Polygon'
+        }
+        
+        base_symbol = symbol.split('/')[0] if '/' in symbol else symbol
+        if base_symbol in crypto_names:
+            # 只添加一个全名，避免大小写重复
+            keywords.append(crypto_names[base_symbol])
+        
+        # 优化：移除通用关键词（如 '$100k', 'ETF', 'approval'），这些会匹配到很多不相关的市场
+        # 只保留与资产直接相关的关键词，最多2-3个
+        
+        # 去重并限制数量（最多3个关键词）
+        unique_keywords = []
+        seen = set()
+        for kw in keywords:
+            kw_lower = kw.lower()
+            if kw_lower not in seen:
+                seen.add(kw_lower)
+                unique_keywords.append(kw)
+                if len(unique_keywords) >= 3:  # 最多3个关键词
+                    break
+        
+        logger.info(f"Extracted {len(unique_keywords)} Polymarket keywords (optimized from {len(keywords)}): {unique_keywords}")
+        return unique_keywords
 
 
 # 全局实例

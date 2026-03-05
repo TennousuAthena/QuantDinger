@@ -16,6 +16,16 @@ def setup_logger():
         format=log_format
     )
     
+    # 过滤 werkzeug 的 INFO 级别日志（减少噪音）
+    # 只保留 WARNING 及以上级别
+    werkzeug_logger = logging.getLogger('werkzeug')
+    werkzeug_logger.setLevel(logging.WARNING)
+    
+    # 过滤 kline 路由的 INFO 级别日志（减少噪音）
+    # 只保留 WARNING 及以上级别
+    kline_logger = logging.getLogger('app.routes.kline')
+    kline_logger.setLevel(logging.WARNING)
+    
     # 创建日志目录
     log_dir = 'logs'
     if not os.path.exists(log_dir):

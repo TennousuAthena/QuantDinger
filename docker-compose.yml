@@ -1,10 +1,15 @@
-# QuantDinger Docker Compose
-# Quick start: docker-compose up -d
+# QuantDinger Docker Compose - One-Click Deployment
+# Usage:
+#   1. Copy .env.example to .env and edit your settings
+#   2. docker-compose up -d
+#   3. Open http://localhost:8888
 
 version: '3.8'
 
 services:
+  # ========================
   # PostgreSQL Database
+  # ========================
   postgres:
     image: postgres:16-alpine
     container_name: quantdinger-db
@@ -13,22 +18,23 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-quantdinger}
       POSTGRES_USER: ${POSTGRES_USER:-quantdinger}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quantdinger123}
-      TZ: Asia/Shanghai
+      TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend_api_python/migrations/init.sql:/docker-entrypoint-initdb.d/01-init.sql
-      - ./backend_api_python/migrations:/migrations
     ports:
-      - "127.0.0.1:5432:5432"
+      - "${DB_PORT:-127.0.0.1:5432}:5432"
     networks:
       - quantdinger-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U quantdinger -d quantdinger"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-quantdinger} -d ${POSTGRES_DB:-quantdinger}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Backend API Service
+  # ========================
+  # Backend API (Python/Flask)
+  # ========================
   backend:
     build:
       context: ./backend_api_python
@@ -39,18 +45,16 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "127.0.0.1:5000:5000"
+      - "${BACKEND_PORT:-127.0.0.1:5000}:5000"
     volumes:
-      # Persistent logs
-      - ./backend_api_python/logs:/app/logs
-      - ./backend_api_python/data:/app/data
-      # Configuration file (optional, for development)
-      - ./backend_api_python/.env:/app/.env
+      - backend_logs:/app/logs
+      - backend_data:/app/data
+      # Mount .env for runtime config
+      - ./backend_api_python/.env:/app/.env:ro
     environment:
       - PYTHON_API_HOST=0.0.0.0
       - PYTHON_API_PORT=5000
-      - TZ=Asia/Shanghai
-      # Database connection
+      - TZ=${TZ:-Asia/Shanghai}
       - DATABASE_URL=postgresql://${POSTGRES_USER:-quantdinger}:${POSTGRES_PASSWORD:-quantdinger123}@postgres:5432/${POSTGRES_DB:-quantdinger}
       - DB_TYPE=postgresql
     networks:
@@ -61,17 +65,17 @@ services:
       timeout: 10s
       retries: 3
 
-  # Frontend Web Service
+  # ========================
+  # Frontend (Nginx + Pre-built)
+  # ========================
   frontend:
     build:
-      context: ./quantdinger_vue
+      context: ./frontend
       dockerfile: Dockerfile
-      # Force pull from official registry to avoid mirror issues
-      pull: true
     container_name: quantdinger-frontend
     restart: unless-stopped
     ports:
-      - "8888:80"
+      - "${FRONTEND_PORT:-8888}:80"
     depends_on:
       - backend
     networks:
@@ -84,6 +88,10 @@ services:
 
 volumes:
   postgres_data:
+    driver: local
+  backend_logs:
+    driver: local
+  backend_data:
     driver: local
 
 networks:

@@ -1071,3 +1071,479 @@ def get_system_strategies():
         import traceback
         logger.error(traceback.format_exc())
         return jsonify({'code': 0, 'msg': str(e), 'data': None}), 500
+
+
+# ==================== Admin Orders ====================
+
+@user_bp.route('/admin-orders', methods=['GET'])
+@login_required
+@admin_required
+def get_admin_orders():
+    """
+    Get all orders across the system (admin only).
+    Merges qd_membership_orders and qd_usdt_orders into a unified list.
+
+    Query params:
+        page: int (default 1)
+        page_size: int (default 20, max 100)
+        status: str (optional, filter by status: paid/pending/confirmed/expired/all)
+        search: str (optional, search by username/email)
+    """
+    try:
+        page = request.args.get('page', 1, type=int)
+        page_size = request.args.get('page_size', 20, type=int)
+        status_filter = request.args.get('status', '', type=str).strip().lower()
+        search = request.args.get('search', '', type=str).strip()
+        page_size = min(100, max(1, page_size))
+        offset = (page - 1) * page_size
+
+        with get_db_connection() as db:
+            cur = db.cursor()
+
+            # --- USDT Orders (primary) ---
+            usdt_conditions = []
+            usdt_params = []
+
+            if status_filter and status_filter != 'all':
+                usdt_conditions.append("o.status = ?")
+                usdt_params.append(status_filter)
+
+            if search:
+                usdt_conditions.append("(u.username ILIKE ? OR u.email ILIKE ? OR u.nickname ILIKE ?)")
+                like_val = f"%{search}%"
+                usdt_params.extend([like_val, like_val, like_val])
+
+            usdt_where = ""
+            if usdt_conditions:
+                usdt_where = "WHERE " + " AND ".join(usdt_conditions)
+
+            # Count
+            cur.execute(
+                f"SELECT COUNT(*) as cnt FROM qd_usdt_orders o LEFT JOIN qd_users u ON u.id = o.user_id {usdt_where}",
+                tuple(usdt_params)
+            )
+            usdt_total = cur.fetchone()['cnt']
+
+            # --- Membership Orders (mock) ---
+            mock_conditions = []
+            mock_params = []
+
+            if status_filter and status_filter != 'all':
+                mock_conditions.append("m.status = ?")
+                mock_params.append(status_filter)
+
+            if search:
+                mock_conditions.append("(u.username ILIKE ? OR u.email ILIKE ? OR u.nickname ILIKE ?)")
+                like_val = f"%{search}%"
+                mock_params.extend([like_val, like_val, like_val])
+
+            mock_where = ""
+            if mock_conditions:
+                mock_where = "WHERE " + " AND ".join(mock_conditions)
+
+            cur.execute(
+                f"SELECT COUNT(*) as cnt FROM qd_membership_orders m LEFT JOIN qd_users u ON u.id = m.user_id {mock_where}",
+                tuple(mock_params)
+            )
+            mock_total = cur.fetchone()['cnt']
+
+            total = usdt_total + mock_total
+
+            # Use UNION ALL to merge both tables into one sorted list
+            # We select a unified schema
+            union_sql = f"""
+                SELECT * FROM (
+                    SELECT
+                        o.id,
+                        'usdt' AS order_type,
+                        o.user_id,
+                        u.username,
+                        u.nickname,
+                        u.email AS user_email,
+                        o.plan,
+                        o.amount_usdt AS amount,
+                        'USDT' AS currency,
+                        o.chain,
+                        o.address,
+                        o.tx_hash,
+                        o.status,
+                        o.created_at,
+                        o.paid_at,
+                        o.confirmed_at,
+                        o.expires_at
+                    FROM qd_usdt_orders o
+                    LEFT JOIN qd_users u ON u.id = o.user_id
+                    {usdt_where}
+
+                    UNION ALL
+
+                    SELECT
+                        m.id,
+                        'mock' AS order_type,
+                        m.user_id,
+                        u.username,
+                        u.nickname,
+                        u.email AS user_email,
+                        m.plan,
+                        m.price_usd AS amount,
+                        'USD' AS currency,
+                        '' AS chain,
+                        '' AS address,
+                        '' AS tx_hash,
+                        m.status,
+                        m.created_at,
+                        m.paid_at,
+                        NULL AS confirmed_at,
+                        NULL AS expires_at
+                    FROM qd_membership_orders m
+                    LEFT JOIN qd_users u ON u.id = m.user_id
+                    {mock_where}
+                ) AS combined
+                ORDER BY combined.created_at DESC
+                LIMIT ? OFFSET ?
+            """
+            all_params = list(usdt_params) + list(mock_params) + [page_size, offset]
+            cur.execute(union_sql, tuple(all_params))
+            rows = cur.fetchall() or []
+
+            # Summary stats
+            cur.execute(
+                f"""SELECT
+                    COUNT(*) AS total_orders,
+                    COALESCE(SUM(CASE WHEN status IN ('paid','confirmed') THEN 1 ELSE 0 END), 0) AS paid_orders,
+                    COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_orders,
+                    COALESCE(SUM(CASE WHEN status IN ('expired','cancelled','failed') THEN 1 ELSE 0 END), 0) AS failed_orders,
+                    COALESCE(SUM(CASE WHEN status IN ('paid','confirmed') THEN amount_usdt ELSE 0 END), 0) AS total_revenue
+                FROM qd_usdt_orders"""
+            )
+            summary_row = cur.fetchone() or {}
+
+            cur.close()
+
+        items = []
+        for row in rows:
+            created_at = row.get('created_at')
+            paid_at = row.get('paid_at')
+            confirmed_at = row.get('confirmed_at')
+            expires_at = row.get('expires_at')
+            if hasattr(created_at, 'isoformat'):
+                created_at = created_at.isoformat()
+            if hasattr(paid_at, 'isoformat'):
+                paid_at = paid_at.isoformat()
+            if hasattr(confirmed_at, 'isoformat'):
+                confirmed_at = confirmed_at.isoformat()
+            if hasattr(expires_at, 'isoformat'):
+                expires_at = expires_at.isoformat()
+
+            items.append({
+                'id': row['id'],
+                'order_type': row.get('order_type') or '',
+                'user_id': row.get('user_id'),
+                'username': row.get('username') or '',
+                'nickname': row.get('nickname') or '',
+                'user_email': row.get('user_email') or '',
+                'plan': row.get('plan') or '',
+                'amount': float(row.get('amount') or 0),
+                'currency': row.get('currency') or '',
+                'chain': row.get('chain') or '',
+                'address': row.get('address') or '',
+                'tx_hash': row.get('tx_hash') or '',
+                'status': row.get('status') or '',
+                'created_at': created_at,
+                'paid_at': paid_at,
+                'confirmed_at': confirmed_at,
+                'expires_at': expires_at
+            })
+
+        return jsonify({
+            'code': 1,
+            'msg': 'success',
+            'data': {
+                'items': items,
+                'total': total,
+                'page': page,
+                'page_size': page_size,
+                'summary': {
+                    'total_orders': int(summary_row.get('total_orders') or 0),
+                    'paid_orders': int(summary_row.get('paid_orders') or 0),
+                    'pending_orders': int(summary_row.get('pending_orders') or 0),
+                    'failed_orders': int(summary_row.get('failed_orders') or 0),
+                    'total_revenue': round(float(summary_row.get('total_revenue') or 0), 2)
+                }
+            }
+        })
+    except Exception as e:
+        logger.error(f"get_admin_orders failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({'code': 0, 'msg': str(e), 'data': None}), 500
+
+
+# ==================== Admin AI Analysis Stats ====================
+
+@user_bp.route('/admin-ai-stats', methods=['GET'])
+@login_required
+@admin_required
+def get_admin_ai_stats():
+    """
+    Get AI analysis usage statistics across the system (admin only).
+    Does NOT expose analysis results, only aggregated counts/stats.
+
+    Query params:
+        page: int (default 1)
+        page_size: int (default 20, max 100)
+        search: str (optional, search by username)
+    """
+    try:
+        page = request.args.get('page', 1, type=int)
+        page_size = request.args.get('page_size', 20, type=int)
+        search = request.args.get('search', '', type=str).strip()
+        page_size = min(100, max(1, page_size))
+        offset = (page - 1) * page_size
+
+        with get_db_connection() as db:
+            cur = db.cursor()
+
+            # --- Overall summary (from qd_analysis_tasks + qd_analysis_memory) ---
+            cur.execute("""
+                SELECT
+                    COUNT(*) AS total_tasks,
+                    COUNT(DISTINCT user_id) AS unique_users,
+                    COUNT(DISTINCT symbol) AS unique_symbols,
+                    COUNT(DISTINCT market) AS unique_markets
+                FROM qd_analysis_tasks
+            """)
+            task_summary = cur.fetchone() or {}
+
+            memory_summary = {}
+            try:
+                cur.execute("""
+                    SELECT
+                        COUNT(*) AS total_memory,
+                        COALESCE(SUM(CASE WHEN was_correct = true THEN 1 ELSE 0 END), 0) AS correct_count,
+                        COALESCE(SUM(CASE WHEN was_correct = false THEN 1 ELSE 0 END), 0) AS incorrect_count,
+                        COALESCE(SUM(CASE WHEN user_feedback = 'helpful' THEN 1 ELSE 0 END), 0) AS helpful_count,
+                        COALESCE(SUM(CASE WHEN user_feedback = 'not_helpful' THEN 1 ELSE 0 END), 0) AS not_helpful_count
+                    FROM qd_analysis_memory
+                """)
+                memory_summary = cur.fetchone() or {}
+            except Exception as mem_err:
+                logger.warning(f"qd_analysis_memory query failed (table/column may not exist): {mem_err}")
+                db.rollback()
+                cur = db.cursor()  # re-create cursor after rollback
+                memory_summary = {}
+
+            # --- Per-user stats ---
+            # Build WHERE clause for user search (applied after JOIN)
+            user_where_clause = ""
+            user_params = []
+            if search:
+                user_where_clause = "WHERE (u.username ILIKE ? OR u.nickname ILIKE ? OR u.email ILIKE ?)"
+                like_val = f"%{search.strip()}%"
+                user_params = [like_val, like_val, like_val]
+
+            # Count distinct users who have analysis records (matching search criteria)
+            count_sql = f"""
+                SELECT COUNT(DISTINCT t.user_id) AS cnt
+                FROM qd_analysis_tasks t
+                LEFT JOIN qd_users u ON u.id = t.user_id
+                {user_where_clause}
+            """
+            cur.execute(count_sql, tuple(user_params))
+            count_result = cur.fetchone()
+            user_total = count_result['cnt'] if count_result else 0
+
+            # Get per-user aggregated stats
+            # Important: Filter by user search criteria AFTER grouping, but we need to apply it in WHERE
+            # Since we're grouping by user fields, we need to filter before GROUP BY
+            stats_sql = f"""
+                SELECT
+                    t.user_id,
+                    u.username,
+                    u.nickname,
+                    u.email,
+                    COUNT(*) AS analysis_count,
+                    COUNT(DISTINCT t.symbol) AS symbol_count,
+                    COUNT(DISTINCT t.market) AS market_count,
+                    MAX(t.created_at) AS last_analysis_at,
+                    MIN(t.created_at) AS first_analysis_at
+                FROM qd_analysis_tasks t
+                LEFT JOIN qd_users u ON u.id = t.user_id
+                {user_where_clause}
+                GROUP BY t.user_id, u.username, u.nickname, u.email
+                ORDER BY analysis_count DESC
+                LIMIT ? OFFSET ?
+            """
+            cur.execute(stats_sql, tuple(user_params) + (page_size, offset))
+            user_rows = cur.fetchall() or []
+
+            # Get per-user analysis_memory stats (correct/helpful counts)
+            user_ids = [r['user_id'] for r in user_rows if r.get('user_id')]
+            memory_stats_map = {}
+            if user_ids:
+                try:
+                    placeholders = ','.join(['?'] * len(user_ids))
+                    cur.execute(
+                        f"""
+                        SELECT
+                            user_id,
+                            COUNT(*) AS memory_count,
+                            COALESCE(SUM(CASE WHEN was_correct = true THEN 1 ELSE 0 END), 0) AS correct,
+                            COALESCE(SUM(CASE WHEN was_correct = false THEN 1 ELSE 0 END), 0) AS incorrect,
+                            COALESCE(SUM(CASE WHEN user_feedback = 'helpful' THEN 1 ELSE 0 END), 0) AS helpful,
+                            COALESCE(SUM(CASE WHEN user_feedback = 'not_helpful' THEN 1 ELSE 0 END), 0) AS not_helpful
+                        FROM qd_analysis_memory
+                        WHERE user_id IN ({placeholders})
+                        GROUP BY user_id
+                        """,
+                        tuple(user_ids)
+                    )
+                    for row in (cur.fetchall() or []):
+                        memory_stats_map[row['user_id']] = {
+                            'memory_count': row['memory_count'],
+                            'correct': row['correct'],
+                            'incorrect': row['incorrect'],
+                            'helpful': row['helpful'],
+                            'not_helpful': row['not_helpful']
+                        }
+                except Exception as mem_err:
+                    logger.warning(f"qd_analysis_memory per-user query failed: {mem_err}")
+                    db.rollback()
+                    cur = db.cursor()  # re-create cursor after rollback
+                    memory_stats_map = {}
+
+            # Get recent analysis records (last 50)
+            # Ensure we get user info even if user_id is NULL or user doesn't exist
+            cur.execute(
+                """
+                SELECT
+                    t.id,
+                    t.user_id,
+                    COALESCE(u.username, '') AS username,
+                    COALESCE(u.nickname, '') AS nickname,
+                    COALESCE(u.email, '') AS email,
+                    t.market,
+                    t.symbol,
+                    t.model,
+                    t.status,
+                    t.created_at,
+                    t.completed_at
+                FROM qd_analysis_tasks t
+                LEFT JOIN qd_users u ON u.id = t.user_id
+                WHERE t.user_id IS NOT NULL
+                ORDER BY t.created_at DESC
+                LIMIT 50
+                """
+            )
+            recent_rows = cur.fetchall() or []
+
+            cur.close()
+
+        # Build per-user items
+        user_items = []
+        for row in user_rows:
+            uid = row.get('user_id')
+            if not uid:  # Skip rows with NULL user_id
+                continue
+                
+            ms = memory_stats_map.get(uid, {})
+            last_at = row.get('last_analysis_at')
+            first_at = row.get('first_analysis_at')
+            
+            # Convert datetime to ISO format string if needed
+            if last_at and hasattr(last_at, 'isoformat'):
+                last_at = last_at.isoformat()
+            elif last_at:
+                last_at = str(last_at)
+            else:
+                last_at = None
+                
+            if first_at and hasattr(first_at, 'isoformat'):
+                first_at = first_at.isoformat()
+            elif first_at:
+                first_at = str(first_at)
+            else:
+                first_at = None
+
+            user_items.append({
+                'user_id': int(uid),
+                'username': str(row.get('username') or ''),
+                'nickname': str(row.get('nickname') or ''),
+                'email': str(row.get('email') or ''),
+                'analysis_count': int(row.get('analysis_count') or 0),
+                'symbol_count': int(row.get('symbol_count') or 0),
+                'market_count': int(row.get('market_count') or 0),
+                'correct': int(ms.get('correct', 0)),
+                'incorrect': int(ms.get('incorrect', 0)),
+                'helpful': int(ms.get('helpful', 0)),
+                'not_helpful': int(ms.get('not_helpful', 0)),
+                'last_analysis_at': last_at,
+                'first_analysis_at': first_at
+            })
+
+        # Build recent records
+        recent_items = []
+        for row in recent_rows:
+            user_id = row.get('user_id')
+            if not user_id:  # Skip rows with NULL user_id
+                continue
+                
+            created_at = row.get('created_at')
+            completed_at = row.get('completed_at')
+            
+            # Convert datetime to ISO format string if needed
+            if created_at and hasattr(created_at, 'isoformat'):
+                created_at = created_at.isoformat()
+            elif created_at:
+                created_at = str(created_at)
+            else:
+                created_at = None
+                
+            if completed_at and hasattr(completed_at, 'isoformat'):
+                completed_at = completed_at.isoformat()
+            elif completed_at:
+                completed_at = str(completed_at)
+            else:
+                completed_at = None
+
+            recent_items.append({
+                'id': int(row.get('id') or 0),
+                'user_id': int(user_id),
+                'username': str(row.get('username') or ''),
+                'nickname': str(row.get('nickname') or ''),
+                'email': str(row.get('email') or ''),
+                'market': str(row.get('market') or ''),
+                'symbol': str(row.get('symbol') or ''),
+                'model': str(row.get('model') or ''),
+                'status': str(row.get('status') or ''),
+                'created_at': created_at,
+                'completed_at': completed_at
+            })
+
+        return jsonify({
+            'code': 1,
+            'msg': 'success',
+            'data': {
+                'user_stats': user_items,
+                'user_total': user_total,
+                'page': page,
+                'page_size': page_size,
+                'recent': recent_items,
+                'summary': {
+                    'total_analyses': int(task_summary.get('total_tasks') or 0),
+                    'unique_users': int(task_summary.get('unique_users') or 0),
+                    'unique_symbols': int(task_summary.get('unique_symbols') or 0),
+                    'unique_markets': int(task_summary.get('unique_markets') or 0),
+                    'total_memory': int(memory_summary.get('total_memory') or 0),
+                    'correct_count': int(memory_summary.get('correct_count') or 0),
+                    'incorrect_count': int(memory_summary.get('incorrect_count') or 0),
+                    'helpful_count': int(memory_summary.get('helpful_count') or 0),
+                    'not_helpful_count': int(memory_summary.get('not_helpful_count') or 0)
+                }
+            }
+        })
+    except Exception as e:
+        logger.error(f"get_admin_ai_stats failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({'code': 0, 'msg': str(e), 'data': None}), 500

@@ -1,0 +1,84 @@
+# ======================================================
+# Workflow: Update Frontend Build
+# ======================================================
+# This workflow is triggered manually (or via repository_dispatch)
+# from your PRIVATE frontend repo after a new build.
+#
+# Setup:
+#   1. In your PRIVATE frontend repo, create a GitHub Action that:
+#      - Builds the Vue.js project
+#      - Uses repository_dispatch to trigger this workflow
+#      - Or: upload the dist as an artifact and trigger this workflow
+#
+#   2. Create a GitHub Personal Access Token (PAT) with repo access
+#      and store it as a secret: FRONTEND_DEPLOY_TOKEN
+#
+# Alternative: Run manually from the Actions tab.
+# ======================================================
+
+name: Update Frontend Build
+
+on:
+  # Manual trigger from GitHub UI
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Frontend version (e.g. 1.2.0)'
+        required: false
+        default: 'latest'
+
+  # Triggered by private repo via repository_dispatch
+  repository_dispatch:
+    types: [frontend-updated]
+
+jobs:
+  update-frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout open-source repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.FRONTEND_DEPLOY_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Download frontend build artifact
+        # Option A: Download from private repo's latest release
+        # Replace OWNER/PRIVATE_REPO with your private frontend repo
+        env:
+          GH_TOKEN: ${{ secrets.FRONTEND_DEPLOY_TOKEN }}
+        run: |
+          echo "Downloading frontend build..."
+          # Option A: From GitHub Release
+          # gh release download latest -R OWNER/quantdinger-frontend -p 'dist.tar.gz' -D /tmp
+          # tar -xzf /tmp/dist.tar.gz -C frontend/dist/
+
+          # Option B: From repository_dispatch payload
+          if [ "${{ github.event.client_payload.artifact_url }}" != "" ]; then
+            curl -L -H "Authorization: token $GH_TOKEN" \
+              "${{ github.event.client_payload.artifact_url }}" \
+              -o /tmp/dist.tar.gz
+            rm -rf frontend/dist/*
+            tar -xzf /tmp/dist.tar.gz -C frontend/dist/
+          else
+            echo "No artifact URL provided. Please use manual upload or release download."
+            echo "Skipping download step - assuming dist/ is already updated."
+          fi
+
+      - name: Update VERSION
+        run: |
+          VERSION="${{ github.event.inputs.version || github.event.client_payload.version || 'latest' }}"
+          echo "$VERSION" > frontend/VERSION
+          echo "Frontend version: $VERSION"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add frontend/dist/ frontend/VERSION
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            VERSION=$(cat frontend/VERSION)
+            git commit -m "chore: update frontend build v${VERSION}"
+            git push
+          fi

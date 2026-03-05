@@ -294,21 +294,79 @@ class OkxClient(BaseRestClient):
         if params:
             # OKX expects the query string in the signed request path. Keep key order stable.
             # Convert all values to string to avoid "True"/"False" surprises.
-            norm = {str(k): "" if v is None else str(v) for k, v in dict(params).items()}
-            qs = urlencode(sorted(norm.items()), doseq=True)
+            # Filter out empty strings and None values (OKX doesn't like empty params)
+            norm = {str(k): str(v) for k, v in dict(params).items() if v is not None and str(v).strip() != ""}
+            if norm:
+                # Sort by key to ensure consistent ordering (OKX requirement)
+                qs = urlencode(sorted(norm.items()), doseq=True)
 
         signed_path = f"{path}?{qs}" if qs else path
         sign = self._sign(ts, method, signed_path, body_str)
+        
+        # For GET requests with query params, we need to ensure the actual request URL matches the signed path
+        # OKX requires exact match between signed path and actual request path
+        if method.upper() == "GET" and qs:
+            # Append query string directly to path to match signature exactly
+            # Don't use params parameter to avoid double encoding
+            request_path = f"{path}?{qs}"
+            request_params = None
+        else:
+            request_path = path
+            request_params = params
+        
         code, data, text = self._request(
             method,
-            path,
-            params=params,
+            request_path,
+            params=request_params,
             data=body_str if body_str else None,
             headers=self._headers(ts, sign),
         )
         if code >= 400:
-            raise LiveTradingError(f"OKX HTTP {code}: {text[:500]}")
+            # Provide more helpful error messages for common permission issues
+            error_msg = text[:500] if text else f"HTTP {code}"
+            if code == 401:
+                error_code = ""
+                if isinstance(data, dict):
+                    error_code = str(data.get("code") or "")
+                if error_code == "50120" or "permission" in error_msg.lower():
+                    raise LiveTradingError(
+                        f"OKX API permission error (HTTP {code}, code {error_code}): {error_msg}\n"
+                        f"Solution: Please enable 'Trade' permission for your API key in OKX account.\n"
+                        f"Path: OKX website -> API Management -> Edit API Key -> Enable 'Trade' permission"
+                    )
+            raise LiveTradingError(f"OKX HTTP {code}: {error_msg}")
         if isinstance(data, dict) and str(data.get("code") or "") not in ("0", ""):
+            error_code = str(data.get("code") or "")
+            error_msg = str(data.get("msg") or data)
+            
+            # Check for specific error codes in data array
+            data_array = data.get("data", [])
+            if isinstance(data_array, list) and data_array:
+                first_item = data_array[0] if isinstance(data_array[0], dict) else {}
+                s_code = str(first_item.get("sCode") or "")
+                s_msg = str(first_item.get("sMsg") or "")
+                
+                # Error code 51008: Insufficient margin
+                if s_code == "51008" or "insufficient" in s_msg.lower() or "margin" in s_msg.lower():
+                    raise LiveTradingError(
+                        f"OKX insufficient margin error (code {s_code}): {s_msg}\n"
+                        f"Solution: Please ensure you have sufficient USDT margin in your account to place this order."
+                    )
+                # Error code 50120: Permission error
+                if s_code == "50120" or error_code == "50120" or "permission" in str(error_msg).lower():
+                    raise LiveTradingError(
+                        f"OKX API permission error (code {s_code or error_code}): {s_msg or error_msg}\n"
+                        f"Solution: Please enable 'Trade' permission for your API key in OKX account.\n"
+                        f"Path: OKX website -> API Management -> Edit API Key -> Enable 'Trade' permission"
+                    )
+            
+            # Fallback for permission errors
+            if error_code == "50120" or "permission" in str(error_msg).lower():
+                raise LiveTradingError(
+                    f"OKX API permission error (code {error_code}): {error_msg}\n"
+                    f"Solution: Please enable 'Trade' permission for your API key in OKX account.\n"
+                    f"Path: OKX website -> API Management -> Edit API Key -> Enable 'Trade' permission"
+                )
             raise LiveTradingError(f"OKX error: {data}")
         return data if isinstance(data, dict) else {"raw": data}
 
@@ -316,21 +374,44 @@ class OkxClient(BaseRestClient):
         code, data, _ = self._request("GET", "/api/v5/public/time")
         return code == 200 and isinstance(data, dict)
 
+    def get_ticker(self, *, inst_id: str) -> Dict[str, Any]:
+        """
+        Get ticker price for an instrument.
+        
+        Endpoint: GET /api/v5/market/ticker?instId=...
+        """
+        if not inst_id:
+            return {}
+        raw = self._public_request("GET", "/api/v5/market/ticker", params={"instId": inst_id})
+        data = (raw.get("data") or []) if isinstance(raw, dict) else []
+        first: Dict[str, Any] = data[0] if isinstance(data, list) and data else {}
+        return first if isinstance(first, dict) else {}
+
     def get_balance(self) -> Dict[str, Any]:
         """
         Private endpoint to validate credentials (best-effort).
         """
         return self._signed_request("GET", "/api/v5/account/balance")
 
-    def get_positions(self, *, inst_id: str = "") -> Dict[str, Any]:
+    def get_positions(self, *, inst_id: str = "", inst_type: str = "SWAP") -> Dict[str, Any]:
         """
-        Get swap positions (best-effort).
+        Get positions (best-effort).
+        
+        Args:
+            inst_id: Instrument ID (optional, for filtering)
+            inst_type: Instrument type - "SPOT" or "SWAP" (default: "SWAP")
 
         Endpoint: GET /api/v5/account/positions
         """
-        params: Dict[str, Any] = {"instType": "SWAP"}
-        if inst_id:
-            params["instId"] = str(inst_id)
+        # Validate inst_type
+        it = str(inst_type or "SWAP").strip().upper()
+        if it not in ("SPOT", "SWAP", "FUTURES", "OPTION"):
+            it = "SWAP"
+        
+        params: Dict[str, Any] = {"instType": it}
+        # Only add instId if it's not empty
+        if inst_id and str(inst_id).strip():
+            params["instId"] = str(inst_id).strip()
         return self._signed_request("GET", "/api/v5/account/positions", params=params)
 
     def set_leverage(self, *, inst_id: str, lever: float, mgn_mode: str = "cross", pos_side: str = "") -> bool:

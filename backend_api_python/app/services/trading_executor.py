@@ -53,48 +53,32 @@ class TradingExecutor:
         self._ensure_db_columns()
 
     def _ensure_db_columns(self):
-        """确保必要的数据库字段存在（支持 SQLite 和 PostgreSQL）"""
+        """确保必要的数据库字段存在（PostgreSQL）"""
         try:
-            db_type = os.getenv('DB_TYPE', 'sqlite').lower()
             with get_db_connection() as db:
                 cursor = db.cursor()
                 col_names = set()
 
-                if db_type == 'postgresql':
-                    # PostgreSQL: 使用 information_schema 查询列
-                    try:
-                        cursor.execute("""
-                            SELECT column_name FROM information_schema.columns 
-                            WHERE table_name = 'qd_strategy_positions'
-                        """)
-                        cols = cursor.fetchall() or []
-                        col_names = {c.get('column_name') or c.get('COLUMN_NAME') for c in cols if isinstance(c, dict)}
-                    except Exception:
-                        col_names = set()
-                else:
-                    # SQLite: 使用 PRAGMA table_info
-                    try:
-                        cursor.execute("PRAGMA table_info(qd_strategy_positions)")
-                        cols = cursor.fetchall() or []
-                        col_names = {c.get('name') for c in cols if isinstance(c, dict)}
-                    except Exception:
-                        col_names = set()
+                # PostgreSQL: 使用 information_schema 查询列
+                try:
+                    cursor.execute("""
+                        SELECT column_name FROM information_schema.columns 
+                        WHERE table_name = 'qd_strategy_positions'
+                    """)
+                    cols = cursor.fetchall() or []
+                    col_names = {c.get('column_name') or c.get('COLUMN_NAME') for c in cols if isinstance(c, dict)}
+                except Exception:
+                    col_names = set()
 
                 if 'highest_price' not in col_names:
-                    logger.info(f"Adding highest_price column to qd_strategy_positions ({db_type})...")
-                    if db_type == 'postgresql':
-                        cursor.execute("ALTER TABLE qd_strategy_positions ADD COLUMN IF NOT EXISTS highest_price DOUBLE PRECISION DEFAULT 0")
-                    else:
-                        cursor.execute("ALTER TABLE qd_strategy_positions ADD COLUMN highest_price REAL DEFAULT 0")
+                    logger.info("Adding highest_price column to qd_strategy_positions...")
+                    cursor.execute("ALTER TABLE qd_strategy_positions ADD COLUMN IF NOT EXISTS highest_price DOUBLE PRECISION DEFAULT 0")
                     db.commit()
                     logger.info("highest_price column added")
 
                 if 'lowest_price' not in col_names:
-                    logger.info(f"Adding lowest_price column to qd_strategy_positions ({db_type})...")
-                    if db_type == 'postgresql':
-                        cursor.execute("ALTER TABLE qd_strategy_positions ADD COLUMN IF NOT EXISTS lowest_price DOUBLE PRECISION DEFAULT 0")
-                    else:
-                        cursor.execute("ALTER TABLE qd_strategy_positions ADD COLUMN lowest_price REAL DEFAULT 0")
+                    logger.info("Adding lowest_price column to qd_strategy_positions...")
+                    cursor.execute("ALTER TABLE qd_strategy_positions ADD COLUMN IF NOT EXISTS lowest_price DOUBLE PRECISION DEFAULT 0")
                     db.commit()
                     logger.info("lowest_price column added")
 
@@ -642,10 +626,20 @@ class TradingExecutor:
                 return
 
             # ============================================
-            # 启动时：完全依赖本地数据库的持仓状态（虚拟持仓）
+            # 启动时：同步持仓状态，清理"幽灵持仓"
             # ============================================
-            # 信号模式下，不再同步交易所持仓
-            pass
+            # 即使信号模式下，也要在启动时检查并清理用户在交易所手动平仓但数据库记录还在的情况
+            # 这样可以避免策略认为还有持仓而无法执行新的开仓信号
+            try:
+                logger.info(f"策略 {strategy_id} 启动时检查持仓同步...")
+                # 调用持仓同步逻辑（即使signal模式也要检查）
+                from app import get_pending_order_worker
+                worker = get_pending_order_worker()
+                if worker and hasattr(worker, '_sync_positions_best_effort'):
+                    worker._sync_positions_best_effort(target_strategy_id=strategy_id)
+                    logger.info(f"策略 {strategy_id} 启动时持仓同步完成")
+            except Exception as e:
+                logger.warning(f"策略 {strategy_id} 启动时持仓同步失败（不影响启动）: {e}")
 
             # 获取当前持仓最高价（从本地数据库读取）
             current_pos_list = self._get_current_positions(strategy_id, symbol)
@@ -1100,8 +1094,12 @@ class TradingExecutor:
             return None
     
     def _is_strategy_running(self, strategy_id: int) -> bool:
-        """检查策略是否在运行"""
+        """
+        检查策略是否在运行
+        同时检查数据库状态和线程状态，避免重启后状态不一致
+        """
         try:
+            # 1. 检查数据库状态
             with get_db_connection() as db:
                 cursor = db.cursor()
                 cursor.execute(
@@ -1110,8 +1108,34 @@ class TradingExecutor:
                 )
                 result = cursor.fetchone()
                 cursor.close()
-                return result and result.get('status') == 'running'
-        except:
+                db_status = result and result.get('status') == 'running'
+            
+            # 2. 检查线程是否真的在运行
+            with self.lock:
+                thread = self.running_strategies.get(strategy_id)
+                thread_running = thread is not None and thread.is_alive()
+            
+            # 3. 如果数据库状态是running但线程不在运行，说明状态不一致（可能是重启后恢复失败）
+            if db_status and not thread_running:
+                logger.warning(f"Strategy {strategy_id} status mismatch: DB=running but thread not running. Updating DB status to stopped.")
+                # 更新数据库状态为stopped，避免策略"僵尸"状态
+                try:
+                    with get_db_connection() as db:
+                        cursor = db.cursor()
+                        cursor.execute(
+                            "UPDATE qd_strategies_trading SET status = 'stopped' WHERE id = %s",
+                            (strategy_id,)
+                        )
+                        db.commit()
+                        cursor.close()
+                except Exception as e:
+                    logger.error(f"Failed to update strategy {strategy_id} status to stopped: {e}")
+                return False
+            
+            # 4. 只有数据库状态和线程状态都一致时才返回True
+            return db_status and thread_running
+        except Exception as e:
+            logger.error(f"Error checking strategy {strategy_id} running status: {e}")
             return False
     
     def _init_exchange(

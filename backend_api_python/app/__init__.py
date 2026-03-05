@@ -33,6 +33,15 @@ def get_pending_order_worker():
     return _pending_order_worker
 
 
+def start_polymarket_worker():
+    """启动Polymarket后台任务"""
+    try:
+        from app.services.polymarket_worker import get_polymarket_worker
+        get_polymarket_worker().start()
+    except Exception as e:
+        logger.error(f"Failed to start Polymarket worker: {e}")
+
+
 def start_portfolio_monitor():
     """Start the portfolio monitor service if enabled.
     
@@ -72,6 +81,31 @@ def start_pending_order_worker():
         get_pending_order_worker().start()
     except Exception as e:
         logger.error(f"Failed to start pending order worker: {e}")
+
+
+def start_usdt_order_worker():
+    """Start the USDT order background worker.
+
+    Periodically scans pending/paid USDT orders and checks on-chain status.
+    Ensures orders are confirmed even if the user closes the browser after payment.
+    Only starts if USDT_PAY_ENABLED=true.
+    """
+    import os
+    if str(os.getenv("USDT_PAY_ENABLED", "False")).lower() not in ("1", "true", "yes"):
+        logger.info("USDT order worker not started (USDT_PAY_ENABLED is not true).")
+        return
+
+    # Avoid running twice with Flask reloader
+    debug = os.getenv("PYTHON_API_DEBUG", "false").lower() == "true"
+    if debug:
+        if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+            return
+
+    try:
+        from app.services.usdt_payment_service import get_usdt_order_worker
+        get_usdt_order_worker().start()
+    except Exception as e:
+        logger.error(f"Failed to start USDT order worker: {e}")
 
 
 def restore_running_strategies():
@@ -116,6 +150,12 @@ def restore_running_strategies():
                     logger.info(f"[OK] {strategy_type_name} {strategy_id} restored")
                 else:
                     logger.warning(f"[FAIL] {strategy_type_name} {strategy_id} restore failed (state may be stale)")
+                    # 如果恢复失败，更新数据库状态为stopped，避免策略处于"僵尸"状态
+                    try:
+                        strategy_service.update_strategy_status(strategy_id, 'stopped')
+                        logger.info(f"[FIX] Updated strategy {strategy_id} status to 'stopped' after restore failure")
+                    except Exception as e:
+                        logger.error(f"Failed to update strategy {strategy_id} status after restore failure: {e}")
             except Exception as e:
                 logger.error(f"Error restoring strategy {strategy_id}: {str(e)}")
                 logger.error(traceback.format_exc())
@@ -231,6 +271,8 @@ def create_app(config_name='default'):
     with app.app_context():
         start_pending_order_worker()
         start_portfolio_monitor()
+        start_usdt_order_worker()
+        start_polymarket_worker()
         restore_running_strategies()
     
     return app

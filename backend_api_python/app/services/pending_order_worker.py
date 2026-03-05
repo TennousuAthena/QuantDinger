@@ -204,15 +204,38 @@ class PendingOrderWorker:
             try:
                 sc = load_strategy_configs(int(sid))
                 exec_mode = (sc.get("execution_mode") or "").strip().lower()
-                if exec_mode != "live":
-                    logger.debug(f"[PositionSync] Strategy {sid} skipped: execution_mode='{exec_mode}' (needs 'live')")
+                # 修改：即使signal模式，如果指定了target_strategy_id（策略启动时调用），也要同步
+                # 这样可以清理用户在交易所手动平仓但数据库记录还在的"幽灵持仓"
+                if exec_mode != "live" and not target_strategy_id:
+                    logger.debug(f"[PositionSync] Strategy {sid} skipped: execution_mode='{exec_mode}' (needs 'live' or explicit target)")
                     continue
-                exchange_config = resolve_exchange_config(sc.get("exchange_config") or {})
+                sync_user_id = int(sc.get("user_id") or 1)
+                exchange_config = resolve_exchange_config(sc.get("exchange_config") or {}, user_id=sync_user_id)
                 safe_cfg = safe_exchange_config_for_log(exchange_config)
+                
+                # 检查 exchange_id 是否有效，如果为空或无效则跳过同步（signal模式可能没有配置交易所）
+                exchange_id = str(exchange_config.get("exchange_id") or "").strip().lower()
+                if not exchange_id:
+                    logger.debug(f"[PositionSync] Strategy {sid} skipped: exchange_id is empty (signal mode or no exchange config)")
+                    continue
+                
                 market_type = (sc.get("market_type") or exchange_config.get("market_type") or "swap")
                 market_type = str(market_type or "swap").strip().lower()
                 if market_type in ("futures", "future", "perp", "perpetual"):
                     market_type = "swap"
+                
+                # Get strategy's trading symbol(s) to filter positions
+                # Only sync positions for symbols that this strategy actually trades
+                strategy_symbol = (sc.get("symbol") or "").strip()
+                trading_config = sc.get("trading_config") or {}
+                symbol_list = trading_config.get("symbol_list") or []
+                # Normalize symbol list: convert to set for fast lookup
+                allowed_symbols = set()
+                if strategy_symbol:
+                    allowed_symbols.add(strategy_symbol.upper())
+                for sym in symbol_list:
+                    if sym and isinstance(sym, str):
+                        allowed_symbols.add(sym.strip().upper())
 
                 # Lazy import MT5 here to allow elif chain later
                 global MT5Client
@@ -223,7 +246,12 @@ class PendingOrderWorker:
                     except ImportError:
                         pass
 
-                client = create_client(exchange_config, market_type=market_type)
+                # 尝试创建客户端，如果失败则跳过（可能是配置错误）
+                try:
+                    client = create_client(exchange_config, market_type=market_type)
+                except Exception as e:
+                    logger.debug(f"[PositionSync] Strategy {sid} skipped: failed to create client (exchange_id={exchange_id}): {e}")
+                    continue
                 
                 # Build an "exchange snapshot" per symbol+side
                 exch_size: Dict[str, Dict[str, float]] = {}  # {symbol: {long: size, short: size}}
@@ -281,6 +309,32 @@ class PendingOrderWorker:
                             except Exception:
                                 pass
                             exch_size.setdefault(hb_sym, {"long": 0.0, "short": 0.0})[side] = float(qty_base)
+                            
+                            # Extract entry price from OKX position data
+                            # OKX API returns avgPx (average price) or avgPxEp (average price in equity) for positions
+                            try:
+                                # Try avgPx first (average entry price)
+                                avg_px = p.get("avgPx")
+                                if avg_px:
+                                    entry_price = float(avg_px)
+                                else:
+                                    # Fallback to avgPxEp (average price in equity)
+                                    avg_px_ep = p.get("avgPxEp")
+                                    if avg_px_ep:
+                                        entry_price = float(avg_px_ep)
+                                    else:
+                                        # Fallback to last price if available
+                                        last_px = p.get("last")
+                                        entry_price = float(last_px) if last_px else 0.0
+                                
+                                if entry_price > 0:
+                                    exch_entry_price.setdefault(hb_sym, {"long": 0.0, "short": 0.0})[side] = entry_price
+                                    logger.debug(f"[PositionSync] OKX {hb_sym} {side}: entry_price={entry_price} from avgPx={p.get('avgPx')} or avgPxEp={p.get('avgPxEp')}")
+                                else:
+                                    logger.warning(f"[PositionSync] OKX {hb_sym} {side}: Could not extract entry price from position data: {p}")
+                            except Exception as e:
+                                logger.warning(f"[PositionSync] Failed to extract entry price for OKX {hb_sym} {side}: {e}")
+                                # Don't set entry_price, will remain 0.0
 
                 elif isinstance(client, BitgetMixClient) and market_type == "swap":
                     product_type = str(exchange_config.get("product_type") or exchange_config.get("productType") or "USDT-FUTURES")
@@ -499,10 +553,23 @@ class PendingOrderWorker:
                             to_update.append({"id": rid, "size": exch_qty, "entry_price": exch_price})
 
                 # [New Feature] Detect positions that exist on exchange but not in local DB, and insert them.
+                # IMPORTANT: Only insert positions for symbols that this strategy actually trades
+                # This prevents syncing positions from quick trade or other sources
                 to_insert: List[Dict[str, Any]] = []
                 local_symbols_sides = {(str(r.get("symbol") or "").strip(), str(r.get("side") or "").strip().lower()) for r in plist}
                 
                 for _sym, _sides_map in exch_size.items():
+                    # Filter: only sync positions for symbols that this strategy trades
+                    # If strategy has no symbol configured, skip auto-insert to prevent syncing quick trade positions
+                    _sym_upper = _sym.strip().upper()
+                    if allowed_symbols and _sym_upper not in allowed_symbols:
+                        logger.debug(f"[PositionSync] Skipping {_sym}: not in strategy's symbol list (strategy trades: {allowed_symbols})")
+                        continue
+                    elif not allowed_symbols:
+                        # Strategy has no symbol configured - skip to prevent syncing unrelated positions
+                        logger.debug(f"[PositionSync] Skipping {_sym}: strategy has no symbol configured (preventing quick trade position sync)")
+                        continue
+                    
                     for _side, _qty in _sides_map.items():
                         if _qty > 1e-12 and (_sym, _side) not in local_symbols_sides:
                             # Exchange has this position but local DB does not
@@ -832,7 +899,8 @@ class PendingOrderWorker:
             return
 
         cfg = load_strategy_configs(strategy_id)
-        exchange_config = resolve_exchange_config(cfg.get("exchange_config") or {})
+        strategy_user_id = int(cfg.get("user_id") or 1)
+        exchange_config = resolve_exchange_config(cfg.get("exchange_config") or {}, user_id=strategy_user_id)
         safe_cfg = safe_exchange_config_for_log(exchange_config)
         exchange_id = str(exchange_config.get("exchange_id") or "").strip().lower()
         market_category = str(cfg.get("market_category") or "Crypto").strip()

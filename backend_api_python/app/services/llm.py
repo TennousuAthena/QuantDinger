@@ -313,7 +313,7 @@ class LLMService:
 
     def call_llm_api(self, messages: list, model: str = None, temperature: float = 0.7, 
                      use_fallback: bool = True, provider: LLMProvider = None,
-                     use_json_mode: bool = True) -> str:
+                     use_json_mode: bool = True, try_alternative_providers: bool = True) -> str:
         """
         Call LLM API with the specified or default provider.
         
@@ -324,6 +324,7 @@ class LLMService:
             use_fallback: Whether to try fallback model on failure
             provider: Override the service's default provider
             use_json_mode: Whether to request JSON output format (default True for analysis, False for code generation)
+            try_alternative_providers: Whether to try alternative providers when current provider fails with 403/402
         
         Returns:
             Generated text content
@@ -347,11 +348,22 @@ class LLMService:
         api_key = self.get_api_key(p)
         
         if not api_key:
-            raise ValueError(f"API key not configured for provider: {p.value}")
+            # If no API key for current provider, try to find any available provider
+            if try_alternative_providers:
+                for alt_provider in [LLMProvider.DEEPSEEK, LLMProvider.GROK, LLMProvider.OPENAI, LLMProvider.GOOGLE, LLMProvider.OPENROUTER]:
+                    if alt_provider != p and self.get_api_key(alt_provider):
+                        logger.warning(f"No API key for {p.value}, switching to {alt_provider.value}")
+                        p = alt_provider
+                        api_key = self.get_api_key(p)
+                        break
+            
+            if not api_key:
+                raise ValueError(f"API key not configured for provider: {p.value}. Please configure at least one LLM provider API key.")
         
         base_url = self.get_base_url(p)
         
         # Normalize model name for the provider
+        original_model = model
         model = self._normalize_model_for_provider(model, p)
         
         config = load_addon_config()
@@ -366,6 +378,7 @@ class LLMService:
                 models_to_try.append(fallback)
         
         last_error = None
+        last_status_code = None
         
         for current_model in models_to_try:
             try:
@@ -384,13 +397,25 @@ class LLMService:
                     
             except requests.exceptions.HTTPError as e:
                 error_detail = e.response.text if e.response else str(e)
-                logger.error(f"{p.value} API HTTP error ({current_model}): {error_detail}")
+                status_code = e.response.status_code if e.response else None
+                last_status_code = status_code
+                
+                logger.error(f"{p.value} API HTTP error ({current_model}): {status_code} - {error_detail}")
                 last_error = str(e)
+                
+                # 403/402 errors usually mean API key issue - try alternative provider
+                if status_code in (402, 403) and try_alternative_providers and current_model == models_to_try[-1]:
+                    # Only try alternative providers after all models in current provider failed
+                    logger.warning(f"{p.value} returned {status_code} (likely API key issue). Trying alternative providers...")
+                    return self._try_alternative_providers(
+                        messages, original_model, temperature, 
+                        use_json_mode, excluded_provider=p
+                    )
                 
                 # Check for recoverable errors - try fallback model
                 # 402: Payment required, 403: Forbidden (invalid key), 404: Model not found, 429: Rate limit
-                if e.response and e.response.status_code in (402, 403, 404, 429):
-                    logger.warning(f"{p.value} returned {e.response.status_code} for model {current_model}; trying fallback...")
+                if status_code in (402, 403, 404, 429):
+                    logger.warning(f"{p.value} returned {status_code} for model {current_model}; trying fallback...")
                     continue
                 
                 if not use_fallback or current_model == models_to_try[-1]:
@@ -408,9 +433,50 @@ class LLMService:
                 if current_model == models_to_try[-1]:
                     raise
         
-        error_msg = f"All model calls failed. Last error: {last_error}"
+        error_msg = f"All model calls failed for {p.value}. Last error: {last_error}"
+        if last_status_code in (402, 403):
+            error_msg += f"\nStatus {last_status_code} usually means: API key invalid/expired, insufficient balance, or no access to model."
+            error_msg += f"\nPlease check your {p.value} API key configuration and account balance."
+        
         logger.error(error_msg)
         raise Exception(error_msg)
+    
+    def _try_alternative_providers(self, messages: list, model: str, temperature: float,
+                                  use_json_mode: bool, excluded_provider: LLMProvider = None) -> str:
+        """
+        Try alternative providers when current provider fails.
+        
+        Priority: DeepSeek > Grok > OpenAI > Google > OpenRouter
+        """
+        priority_order = [
+            LLMProvider.DEEPSEEK,
+            LLMProvider.GROK,
+            LLMProvider.OPENAI,
+            LLMProvider.GOOGLE,
+            LLMProvider.OPENROUTER,
+        ]
+        
+        for alt_provider in priority_order:
+            if alt_provider == excluded_provider:
+                continue
+            
+            api_key = self.get_api_key(alt_provider)
+            if not api_key:
+                continue
+            
+            logger.info(f"Trying alternative provider: {alt_provider.value}")
+            try:
+                return self.call_llm_api(
+                    messages, model, temperature,
+                    use_fallback=True, provider=alt_provider,
+                    use_json_mode=use_json_mode,
+                    try_alternative_providers=False  # Prevent infinite recursion
+                )
+            except Exception as e:
+                logger.warning(f"Alternative provider {alt_provider.value} also failed: {str(e)}")
+                continue
+        
+        raise Exception(f"All LLM providers failed. Please check your API key configurations.")
 
     # Legacy method for backward compatibility
     def call_openrouter_api(self, messages: list, model: str = None, temperature: float = 0.7, use_fallback: bool = True) -> str:

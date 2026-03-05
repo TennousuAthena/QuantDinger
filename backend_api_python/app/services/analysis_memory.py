@@ -43,10 +43,12 @@ class AnalysisMemory:
         self._ensure_table()
     
     def _ensure_table(self):
-        """Create memory table if not exists."""
+        """Create memory table if not exists, and add missing columns if needed."""
         try:
             with get_db_connection() as db:
                 cur = db.cursor()
+                
+                # 创建表（如果不存在）
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS qd_analysis_memory (
                         id SERIAL PRIMARY KEY,
@@ -64,6 +66,7 @@ class AnalysisMemory:
                         risks JSONB,
                         scores JSONB,
                         indicators_snapshot JSONB,
+                        raw_result JSONB,
                         created_at TIMESTAMP DEFAULT NOW(),
                         validated_at TIMESTAMP,
                         actual_outcome VARCHAR(20),
@@ -72,20 +75,50 @@ class AnalysisMemory:
                         user_feedback VARCHAR(20),
                         feedback_at TIMESTAMP
                     );
-                    
+                """)
+                
+                # 检查并添加缺失的列（用于已存在的表）
+                cur.execute("""
+                    DO $$
+                    BEGIN
+                        -- 添加 user_id 列（如果不存在）
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns 
+                            WHERE table_name = 'qd_analysis_memory' AND column_name = 'user_id'
+                        ) THEN
+                            ALTER TABLE qd_analysis_memory ADD COLUMN user_id INT;
+                        END IF;
+                        
+                        -- 添加 raw_result 列（如果不存在）
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns 
+                            WHERE table_name = 'qd_analysis_memory' AND column_name = 'raw_result'
+                        ) THEN
+                            ALTER TABLE qd_analysis_memory ADD COLUMN raw_result JSONB;
+                        END IF;
+                    END $$;
+                """)
+                
+                # 创建索引
+                cur.execute("""
                     CREATE INDEX IF NOT EXISTS idx_analysis_memory_symbol 
                     ON qd_analysis_memory(market, symbol);
                     
                     CREATE INDEX IF NOT EXISTS idx_analysis_memory_created 
                     ON qd_analysis_memory(created_at DESC);
                     
+                    CREATE INDEX IF NOT EXISTS idx_analysis_memory_validated 
+                    ON qd_analysis_memory(validated_at) WHERE validated_at IS NOT NULL;
+                    
                     CREATE INDEX IF NOT EXISTS idx_analysis_memory_user
                     ON qd_analysis_memory(user_id);
                 """)
+                
                 db.commit()
                 cur.close()
+                logger.debug("Analysis memory table ensured successfully")
         except Exception as e:
-            logger.warning(f"Memory table creation skipped: {e}")
+            logger.warning(f"Memory table creation/update skipped: {e}")
     
     def store(self, analysis_result: Dict[str, Any], user_id: int = None) -> Optional[int]:
         """

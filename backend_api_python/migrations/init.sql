@@ -803,6 +803,98 @@ BEGIN
 END $$;
 
 -- =============================================================================
+-- Quick Trades (manual / discretionary orders from Quick Trade Panel)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS qd_quick_trades (
+    id              SERIAL PRIMARY KEY,
+    user_id         INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE CASCADE,
+    credential_id   INTEGER DEFAULT 0,
+    exchange_id     VARCHAR(40) NOT NULL DEFAULT '',
+    symbol          VARCHAR(60) NOT NULL DEFAULT '',
+    side            VARCHAR(10) NOT NULL DEFAULT '',       -- buy / sell
+    order_type      VARCHAR(20) NOT NULL DEFAULT 'market', -- market / limit
+    amount          DECIMAL(24, 8) DEFAULT 0,
+    price           DECIMAL(24, 8) DEFAULT 0,
+    leverage        INTEGER DEFAULT 1,
+    market_type     VARCHAR(20) DEFAULT 'swap',            -- swap / spot
+    tp_price        DECIMAL(24, 8) DEFAULT 0,
+    sl_price        DECIMAL(24, 8) DEFAULT 0,
+    status          VARCHAR(20) DEFAULT 'submitted',       -- submitted / filled / failed / cancelled
+    exchange_order_id VARCHAR(120) DEFAULT '',
+    filled_amount   DECIMAL(24, 8) DEFAULT 0,
+    avg_fill_price  DECIMAL(24, 8) DEFAULT 0,
+    error_msg       TEXT DEFAULT '',
+    source          VARCHAR(40) DEFAULT 'manual',          -- ai_radar / ai_analysis / indicator / manual
+    raw_result      JSONB,
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_quick_trades_user    ON qd_quick_trades(user_id);
+CREATE INDEX IF NOT EXISTS idx_quick_trades_created ON qd_quick_trades(created_at DESC);
+
+-- =============================================================================
+-- Polymarket Prediction Markets (预测市场数据和分析)
+-- =============================================================================
+
+-- 预测市场表（缓存）
+CREATE TABLE IF NOT EXISTS qd_polymarket_markets (
+    id SERIAL PRIMARY KEY,
+    market_id VARCHAR(255) UNIQUE NOT NULL,
+    question TEXT,
+    category VARCHAR(100),  -- crypto, politics, economics, sports
+    current_probability DECIMAL(5,2),  -- YES概率（0-100）
+    volume_24h DECIMAL(20,2),
+    liquidity DECIMAL(20,2),
+    end_date_iso TIMESTAMP,
+    status VARCHAR(50),  -- active, closed, resolved
+    outcome_tokens JSONB,  -- YES/NO价格和交易量
+    slug VARCHAR(255),  -- Polymarket事件slug，用于构建URL
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_polymarket_category ON qd_polymarket_markets(category);
+CREATE INDEX IF NOT EXISTS idx_polymarket_status ON qd_polymarket_markets(status);
+CREATE INDEX IF NOT EXISTS idx_polymarket_updated ON qd_polymarket_markets(updated_at DESC);
+
+-- AI分析记录表
+CREATE TABLE IF NOT EXISTS qd_polymarket_ai_analysis (
+    id SERIAL PRIMARY KEY,
+    market_id VARCHAR(255) NOT NULL,
+    user_id INTEGER,  -- 可选：用户特定的分析
+    ai_predicted_probability DECIMAL(5,2),
+    market_probability DECIMAL(5,2),
+    divergence DECIMAL(5,2),  -- AI - 市场
+    recommendation VARCHAR(20),  -- YES/NO/HOLD
+    confidence_score DECIMAL(5,2),
+    opportunity_score DECIMAL(5,2),
+    reasoning TEXT,
+    key_factors JSONB,
+    related_assets TEXT[],  -- 相关资产列表
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_polymarket_analysis_market ON qd_polymarket_ai_analysis(market_id);
+CREATE INDEX IF NOT EXISTS idx_polymarket_analysis_opportunity ON qd_polymarket_ai_analysis(opportunity_score DESC);
+CREATE INDEX IF NOT EXISTS idx_polymarket_analysis_user ON qd_polymarket_ai_analysis(user_id);
+
+-- 资产交易机会表（基于预测市场生成）
+CREATE TABLE IF NOT EXISTS qd_polymarket_asset_opportunities (
+    id SERIAL PRIMARY KEY,
+    market_id VARCHAR(255) NOT NULL,
+    asset_symbol VARCHAR(100),
+    asset_market VARCHAR(50),
+    signal VARCHAR(20),  -- BUY/SELL/HOLD
+    confidence DECIMAL(5,2),
+    reasoning TEXT,
+    entry_suggestion JSONB,  -- 入场建议
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_polymarket_opp_market ON qd_polymarket_asset_opportunities(market_id);
+CREATE INDEX IF NOT EXISTS idx_polymarket_opp_asset ON qd_polymarket_asset_opportunities(asset_symbol, asset_market);
+
+-- =============================================================================
 -- Completion Notice
 -- =============================================================================
 DO $$

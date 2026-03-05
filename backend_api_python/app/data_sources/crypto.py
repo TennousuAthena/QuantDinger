@@ -2,7 +2,7 @@
 加密货币数据源
 使用 CCXT (Coinbase) 获取数据
 """
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timedelta
 import ccxt
 
@@ -20,6 +20,9 @@ class CryptoDataSource(BaseDataSource):
     
     # 时间周期映射
     TIMEFRAME_MAP = CCXTConfig.TIMEFRAME_MAP
+    
+    # 常见的报价货币列表（按优先级排序）
+    COMMON_QUOTES = ['USDT', 'USD', 'BTC', 'ETH', 'BUSD', 'USDC', 'BNB', 'EUR', 'GBP']
     
     def __init__(self):
         config = {
@@ -43,27 +46,189 @@ class CryptoDataSource(BaseDataSource):
             
         exchange_class = getattr(ccxt, exchange_id)
         self.exchange = exchange_class(config)
+        
+        # 延迟加载 markets（首次使用时加载）
+        self._markets_loaded = False
+        self._markets_cache = None
+    
+    def _ensure_markets_loaded(self) -> bool:
+        """确保 markets 已加载（用于符号验证）"""
+        if self._markets_loaded and self._markets_cache is not None:
+            return True
+        
+        try:
+            # 某些交易所需要显式加载 markets
+            if hasattr(self.exchange, 'load_markets'):
+                self.exchange.load_markets(reload=False)
+            self._markets_cache = getattr(self.exchange, 'markets', {})
+            self._markets_loaded = True
+            return True
+        except Exception as e:
+            logger.debug(f"Failed to load markets for {self.exchange.id}: {e}")
+            return False
+    
+    def _normalize_symbol(self, symbol: str) -> Tuple[str, str]:
+        """
+        规范化符号格式，返回 (normalized_symbol, base_currency)
+        
+        处理各种输入格式：
+        - BTC/USDT -> BTC/USDT
+        - BTCUSDT -> BTC/USDT
+        - BTC/USDT:USDT -> BTC/USDT
+        - BTC -> BTC/USDT (默认)
+        - PI, TRX -> PI/USDT, TRX/USDT
+        """
+        if not symbol:
+            return '', ''
+        
+        sym = symbol.strip()
+        
+        # 移除 swap/futures 后缀
+        if ':' in sym:
+            sym = sym.split(':', 1)[0]
+        
+        sym = sym.upper()
+        
+        # 如果已经有分隔符，直接解析
+        if '/' in sym:
+            parts = sym.split('/', 1)
+            base = parts[0].strip()
+            quote = parts[1].strip() if len(parts) > 1 else ''
+            if base and quote:
+                return f"{base}/{quote}", base
+        
+        # 尝试从常见报价货币中识别
+        for quote in self.COMMON_QUOTES:
+            if sym.endswith(quote) and len(sym) > len(quote):
+                base = sym[:-len(quote)]
+                if base:
+                    return f"{base}/{quote}", base
+        
+        # 如果无法识别，默认使用 USDT
+        return f"{sym}/USDT", sym
+    
+    def _find_valid_symbol(self, base: str, preferred_quote: str = 'USDT') -> Optional[str]:
+        """
+        在交易所的 markets 中查找有效的符号
+        
+        Args:
+            base: 基础货币（如 'PI', 'TRX'）
+            preferred_quote: 首选的报价货币
+            
+        Returns:
+            找到的有效符号，如果找不到则返回 None
+        """
+        if not self._ensure_markets_loaded():
+            return None
+        
+        markets = self._markets_cache or {}
+        if not markets:
+            return None
+        
+        # 按优先级尝试不同的报价货币
+        quotes_to_try = [preferred_quote] + [q for q in self.COMMON_QUOTES if q != preferred_quote]
+        
+        for quote in quotes_to_try:
+            candidate = f"{base}/{quote}"
+            if candidate in markets:
+                market = markets[candidate]
+                # 检查市场是否活跃
+                if market.get('active', True):
+                    return candidate
+        
+        return None
+    
+    def _normalize_symbol_for_exchange(self, symbol: str) -> str:
+        """
+        根据交易所特性规范化符号
+        
+        不同交易所的符号格式要求：
+        - Binance: BTC/USDT (标准格式)
+        - OKX: BTC/USDT (标准格式，但某些币种可能不支持)
+        - Coinbase: BTC/USD (通常使用 USD 而不是 USDT)
+        - Kraken: XBT/USD (BTC 映射为 XBT)
+        - Bitfinex: tBTCUST (特殊格式)
+        """
+        normalized, base = self._normalize_symbol(symbol)
+        
+        if not normalized or not base:
+            return symbol
+        
+        exchange_id = getattr(self.exchange, 'id', '').lower()
+        
+        # 特殊处理：某些交易所的符号映射
+        if exchange_id == 'coinbase':
+            # Coinbase 通常使用 USD 而不是 USDT
+            if normalized.endswith('/USDT'):
+                usd_version = normalized.replace('/USDT', '/USD')
+                if self._ensure_markets_loaded():
+                    markets = self._markets_cache or {}
+                    if usd_version in markets:
+                        return usd_version
+        
+        # 尝试在交易所中查找有效符号
+        if self._ensure_markets_loaded():
+            valid_symbol = self._find_valid_symbol(base, normalized.split('/')[1] if '/' in normalized else 'USDT')
+            if valid_symbol:
+                return valid_symbol
+        
+        return normalized
 
     def get_ticker(self, symbol: str) -> Dict[str, Any]:
         """
         Get latest ticker for a crypto symbol via CCXT.
 
         Accepts common formats:
-        - BTC/USDT
-        - BTCUSDT
-        - BTC/USDT:USDT (swap-style suffix, will be normalized)
+        - BTC/USDT, BTCUSDT, BTC/USDT:USDT
+        - PI, TRX (will be normalized and searched across exchanges)
+        - 自动适配不同交易所的符号格式要求
         """
-        sym = (symbol or "").strip()
-        if ":" in sym:
-            sym = sym.split(":", 1)[0]
-        sym = sym.upper()
-        if "/" not in sym:
-            # Coinbase often uses USD, check if we need to adapt
-            if sym.endswith("USDT") and len(sym) > 4:
-                sym = f"{sym[:-4]}/USDT"
-            elif sym.endswith("USD") and len(sym) > 3:
-                sym = f"{sym[:-3]}/USD"
-        return self.exchange.fetch_ticker(sym)
+        if not symbol or not symbol.strip():
+            return {'last': 0, 'symbol': symbol}
+        
+        # 规范化符号
+        normalized = self._normalize_symbol_for_exchange(symbol)
+        
+        if not normalized:
+            logger.warning(f"Failed to normalize symbol: {symbol}")
+            return {'last': 0, 'symbol': symbol}
+        
+        # 尝试获取 ticker
+        try:
+            ticker = self.exchange.fetch_ticker(normalized)
+            if ticker and isinstance(ticker, dict):
+                return ticker
+        except Exception as e:
+            error_msg = str(e).lower()
+            is_symbol_error = any(keyword in error_msg for keyword in [
+                'does not have market symbol',
+                'symbol not found',
+                'invalid symbol',
+                'market does not exist',
+                'trading pair not found'
+            ])
+            
+            if is_symbol_error:
+                # 尝试查找替代符号
+                base = normalized.split('/')[0] if '/' in normalized else normalized
+                if self._ensure_markets_loaded():
+                    valid_symbol = self._find_valid_symbol(base)
+                    if valid_symbol and valid_symbol != normalized:
+                        try:
+                            logger.debug(f"Trying alternative symbol: {valid_symbol} (original: {symbol}, first attempt: {normalized})")
+                            ticker = self.exchange.fetch_ticker(valid_symbol)
+                            if ticker and isinstance(ticker, dict):
+                                return ticker
+                        except Exception as e2:
+                            logger.debug(f"Alternative symbol {valid_symbol} also failed: {e2}")
+            
+            # 如果所有尝试都失败，记录警告并返回默认值
+            logger.warning(
+                f"Symbol '{symbol}' (normalized: {normalized}) not found on {self.exchange.id}. "
+                f"Error: {str(e)[:100]}"
+            )
+        
+        return {'last': 0, 'symbol': symbol}
     
     def get_kline(
         self,
@@ -78,11 +243,12 @@ class CryptoDataSource(BaseDataSource):
         try:
             ccxt_timeframe = self.TIMEFRAME_MAP.get(timeframe, '1d')
             
-            # 构建交易对符号
-            if not symbol.endswith('USDT') and not symbol.endswith('USD'):
-                symbol_pair = f'{symbol}/USDT'
-            else:
-                symbol_pair = symbol
+            # 使用统一的符号规范化方法
+            symbol_pair = self._normalize_symbol_for_exchange(symbol)
+            
+            if not symbol_pair:
+                logger.warning(f"Failed to normalize symbol for K-line: {symbol}")
+                return []
             
             # logger.info(f"获取加密货币K线: {symbol_pair}, 周期: {ccxt_timeframe}, 条数: {limit}")
             

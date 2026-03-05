@@ -330,12 +330,14 @@ class CommunityService:
                 
                 # 6. 复制指标到买家账户
                 now_ts = int(time.time())
+                # Get vip_free as boolean from indicator
+                vip_free_value = bool(indicator.get('vip_free') or False)
                 cur.execute("""
                     INSERT INTO qd_indicator_codes
                     (user_id, is_buy, end_time, name, code, description,
                      publish_to_community, pricing_type, price, is_encrypted, preview_image, vip_free,
                      createtime, updatetime, created_at, updated_at)
-                    VALUES (?, 1, 0, ?, ?, ?, 0, 'free', 0, ?, ?, 0, ?, ?, NOW(), NOW())
+                    VALUES (?, 1, 0, ?, ?, ?, 0, 'free', 0, ?, ?, ?, ?, ?, NOW(), NOW())
                 """, (
                     buyer_id,
                     indicator['name'],
@@ -343,6 +345,7 @@ class CommunityService:
                     indicator['description'],
                     indicator['is_encrypted'] or 0,
                     indicator['preview_image'],
+                    vip_free_value,  # Use boolean value instead of integer 0
                     now_ts, now_ts
                 ))
                 

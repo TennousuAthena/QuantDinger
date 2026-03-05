@@ -4,7 +4,7 @@
 """
 from app.config.settings import Config
 from app.config.api_keys import APIKeys
-from app.config.database import RedisConfig, SQLiteConfig, CacheConfig
+from app.config.database import RedisConfig, CacheConfig
 from app.config.data_sources import (
     DataSourceConfig,
     FinnhubConfig,
@@ -23,7 +23,6 @@ __all__ = [
     
     # 数据库/缓存
     'RedisConfig',
-    'SQLiteConfig',
     'CacheConfig',
     
     # 数据源

@@ -4,14 +4,15 @@ USDT Payment Service (方案B：每单独立地址 + 自动对账)
 MVP:
 - 只支持 USDT-TRC20
 - 使用 XPUB 派生地址（服务端只保存 xpub，不保存私钥）
-- 通过 TronGrid API 轮询到账（前端轮询订单状态时触发刷新）
+- 后台 Worker 线程自动轮询链上到账 + 前端轮询双保险
 """
 
 import os
+import threading
 import time
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -233,10 +234,13 @@ class UsdtPaymentService:
     # -------------------- Chain check --------------------
 
     def _refresh_order_in_tx(self, cur, row: Dict[str, Any]) -> None:
+        """Check chain status for a single order and update in the current transaction."""
         cfg = self._get_cfg()
         status = (row.get("status") or "").lower()
         chain = (row.get("chain") or "").upper()
+        order_id = row.get("id")
 
+        # --- Expiry check (only for pending; paid orders should still be confirmed) ---
         expires_at = row.get("expires_at")
         now = datetime.now(timezone.utc)
         if expires_at and isinstance(expires_at, datetime):
@@ -244,7 +248,7 @@ class UsdtPaymentService:
             if exp.tzinfo is None:
                 exp = exp.replace(tzinfo=timezone.utc)
             if status == "pending" and exp <= now:
-                cur.execute("UPDATE qd_usdt_orders SET status = 'expired', updated_at = NOW() WHERE id = ?", (row["id"],))
+                cur.execute("UPDATE qd_usdt_orders SET status = 'expired', updated_at = NOW() WHERE id = ?", (order_id,))
                 return
 
         if chain != "TRC20":
@@ -257,6 +261,12 @@ class UsdtPaymentService:
         if not address or amount <= 0:
             return
 
+        # --- For 'paid' status, skip chain query and just check confirm delay ---
+        if status == "paid":
+            self._try_confirm_paid_order(cur, row, cfg, now)
+            return
+
+        # --- For 'pending' status, query chain for incoming transfer ---
         tx = self._find_trc20_usdt_incoming(address, amount, row.get("created_at"))
         if not tx:
             return
@@ -265,37 +275,60 @@ class UsdtPaymentService:
         paid_at = datetime.now(timezone.utc)
         cur.execute(
             "UPDATE qd_usdt_orders SET status = 'paid', tx_hash = ?, paid_at = ?, updated_at = NOW() WHERE id = ? AND status = 'pending'",
-            (tx_hash, paid_at, row["id"]),
+            (tx_hash, paid_at, order_id),
         )
 
-        # Confirm after a short delay to reduce reorg/uncle risk (TRON usually stable)
-        # If already old enough, confirm now.
+        # Try to confirm immediately if delay is satisfied
         confirm_sec = int(cfg.get("confirm_seconds") or 30)
         try:
-            if confirm_sec <= 0:
-                confirm_sec = 0
-            # If transaction timestamp is available, use it
             tx_ts = tx.get("block_timestamp")
             if tx_ts:
                 tx_time = datetime.fromtimestamp(int(tx_ts) / 1000.0, tz=timezone.utc)
                 if (now - tx_time).total_seconds() >= confirm_sec:
-                    self._confirm_and_activate_in_tx(cur, row["id"], row.get("user_id"), row.get("plan"), tx_hash)
-            else:
-                # no timestamp -> confirm immediately
-                self._confirm_and_activate_in_tx(cur, row["id"], row.get("user_id"), row.get("plan"), tx_hash)
+                    self._confirm_and_activate_in_tx(cur, order_id, row.get("user_id"), row.get("plan"), tx_hash)
+            elif confirm_sec <= 0:
+                self._confirm_and_activate_in_tx(cur, order_id, row.get("user_id"), row.get("plan"), tx_hash)
         except Exception:
-            # do not block
             pass
 
+    def _try_confirm_paid_order(self, cur, row: Dict[str, Any], cfg: Dict[str, Any], now: datetime) -> None:
+        """For orders already in 'paid' status, check if confirm delay is met and activate."""
+        confirm_sec = int(cfg.get("confirm_seconds") or 30)
+        paid_at = row.get("paid_at")
+        if paid_at:
+            if isinstance(paid_at, str):
+                try:
+                    paid_at = datetime.fromisoformat(paid_at.replace("Z", "+00:00"))
+                except Exception:
+                    paid_at = None
+            if paid_at and paid_at.tzinfo is None:
+                paid_at = paid_at.replace(tzinfo=timezone.utc)
+            if paid_at and (now - paid_at).total_seconds() >= confirm_sec:
+                self._confirm_and_activate_in_tx(cur, row["id"], row.get("user_id"), row.get("plan"), row.get("tx_hash") or "")
+                return
+        # Fallback: if paid_at missing but confirm_sec <= 0, confirm now
+        if confirm_sec <= 0:
+            self._confirm_and_activate_in_tx(cur, row["id"], row.get("user_id"), row.get("plan"), row.get("tx_hash") or "")
+
     def _confirm_and_activate_in_tx(self, cur, order_id: int, user_id: int, plan: str, tx_hash: str) -> None:
-        # Mark confirmed if not already
+        """Mark order as confirmed and activate membership. Idempotent: skips if already confirmed."""
+        # --- Idempotency check: re-read current status ---
+        try:
+            cur.execute("SELECT status FROM qd_usdt_orders WHERE id = ?", (order_id,))
+            current = cur.fetchone()
+            if current and (current.get("status") or "").lower() == "confirmed":
+                logger.debug(f"USDT order {order_id} already confirmed, skipping activation.")
+                return
+        except Exception:
+            pass
+
+        # Mark confirmed
         cur.execute(
             "UPDATE qd_usdt_orders SET status='confirmed', confirmed_at = NOW(), updated_at = NOW() WHERE id = ? AND status IN ('paid','pending')",
             (order_id,),
         )
-        # Activate membership (idempotent-ish: billing_service stacks vip)
+        # Activate membership
         try:
-            # We use existing membership activation (writes qd_membership_orders + credits logs).
             ok, msg, data = self.billing.purchase_membership(int(user_id), str(plan))
             logger.info(f"USDT activate membership: order={order_id} user={user_id} plan={plan} ok={ok} msg={msg}")
         except Exception as e:
@@ -340,13 +373,9 @@ class UsdtPaymentService:
                     if min_ts and int(it.get("block_timestamp") or 0) < min_ts:
                         continue
                     val = int(it.get("value") or 0)
-                    if val != target:
+                    # Accept payments >= order amount (tolerance for overpayment)
+                    if val < target:
                         continue
-                    # basic checks
-                    token = it.get("token_info") or {}
-                    if str(token.get("symbol") or "").upper() != "USDT":
-                        # some APIs omit symbol; contract filter should already ensure
-                        pass
                     return it
                 except Exception:
                     continue
@@ -354,8 +383,114 @@ class UsdtPaymentService:
             return None
         return None
 
+    # -------------------- Batch refresh (for worker) --------------------
+
+    def refresh_all_active_orders(self) -> int:
+        """
+        Scan all pending/paid USDT orders and refresh their chain status.
+        Called by the background UsdtOrderWorker.
+
+        Returns the number of orders that were updated to 'confirmed' or 'expired'.
+        """
+        updated = 0
+        try:
+            with get_db_connection() as db:
+                cur = db.cursor()
+                self._ensure_schema_best_effort(cur)
+
+                cur.execute(
+                    """
+                    SELECT id, user_id, plan, chain, amount_usdt, address_index, address, status, tx_hash,
+                           paid_at, confirmed_at, expires_at, created_at, updated_at
+                    FROM qd_usdt_orders
+                    WHERE status IN ('pending', 'paid')
+                    ORDER BY created_at ASC
+                    LIMIT 100
+                    """
+                )
+                rows = cur.fetchall() or []
+
+                for row in rows:
+                    old_status = (row.get("status") or "").lower()
+                    try:
+                        self._refresh_order_in_tx(cur, row)
+                    except Exception as e:
+                        logger.debug(f"refresh_all: order {row.get('id')} error: {e}")
+                        continue
+
+                    # Check if status changed
+                    try:
+                        cur.execute("SELECT status FROM qd_usdt_orders WHERE id = ?", (row["id"],))
+                        new_row = cur.fetchone()
+                        new_status = (new_row.get("status") or "").lower() if new_row else old_status
+                        if new_status != old_status:
+                            updated += 1
+                            logger.info(f"USDT order {row['id']}: {old_status} -> {new_status}")
+                    except Exception:
+                        pass
+
+                db.commit()
+                cur.close()
+        except Exception as e:
+            logger.error(f"refresh_all_active_orders error: {e}", exc_info=True)
+        return updated
+
+
+# ==================== Background Worker ====================
+
+class UsdtOrderWorker:
+    """
+    Background thread that periodically scans pending/paid USDT orders
+    and checks on-chain status via TronGrid API.
+
+    This ensures that even if the user closes the browser after payment,
+    the order will still be confirmed and membership activated.
+    """
+
+    def __init__(self, poll_interval_sec: float = 30.0):
+        self.poll_interval_sec = float(poll_interval_sec)
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
+
+    def start(self) -> bool:
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return True
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._run_loop, name="UsdtOrderWorker", daemon=True)
+            self._thread.start()
+            logger.info("UsdtOrderWorker started (interval=%ss)", self.poll_interval_sec)
+            return True
+
+    def stop(self):
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=5)
+            logger.info("UsdtOrderWorker stopped")
+
+    def _run_loop(self):
+        # Wait a bit on startup to let the app fully initialize
+        self._stop_event.wait(timeout=10)
+
+        while not self._stop_event.is_set():
+            try:
+                svc = get_usdt_payment_service()
+                cfg = svc._get_cfg()
+                if cfg["enabled"]:
+                    updated = svc.refresh_all_active_orders()
+                    if updated > 0:
+                        logger.info(f"UsdtOrderWorker: refreshed {updated} orders")
+            except Exception as e:
+                logger.error(f"UsdtOrderWorker loop error: {e}", exc_info=True)
+
+            self._stop_event.wait(timeout=self.poll_interval_sec)
+
+
+# ==================== Singletons ====================
 
 _svc = None
+_worker = None
 
 
 def get_usdt_payment_service() -> UsdtPaymentService:
@@ -364,3 +499,10 @@ def get_usdt_payment_service() -> UsdtPaymentService:
         _svc = UsdtPaymentService()
     return _svc
 
+
+def get_usdt_order_worker() -> UsdtOrderWorker:
+    global _worker
+    if _worker is None:
+        interval = float(os.getenv("USDT_WORKER_POLL_INTERVAL", "30"))
+        _worker = UsdtOrderWorker(poll_interval_sec=interval)
+    return _worker

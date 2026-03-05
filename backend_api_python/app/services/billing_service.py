@@ -36,6 +36,7 @@ DEFAULT_BILLING_CONFIG = {
     'cost_backtest': 3,           # 回测 每次消耗积分
     'cost_portfolio_monitor': 8,  # Portfolio AI监控 每次消耗积分
     'cost_indicator_create': 0,   # 创建指标 免费
+    'cost_polymarket_deep_analysis': 15,  # Polymarket深度分析 每次消耗积分
 }
 
 # Feature name mapping (for log recording)
@@ -45,6 +46,7 @@ FEATURE_NAMES = {
     'backtest': 'Backtest',
     'portfolio_monitor': 'Portfolio Monitor',
     'indicator_create': 'Indicator Create',
+    'polymarket_deep_analysis': 'Polymarket Deep Analysis',
 }
 
 

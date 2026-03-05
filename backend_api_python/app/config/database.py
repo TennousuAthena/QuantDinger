@@ -46,26 +46,6 @@ class RedisConfig(metaclass=MetaRedisConfig):
         return f"redis://{cls.HOST}:{cls.PORT}/{cls.DB}"
 
 
-class MetaSQLiteConfig(type):
-    """SQLite 配置"""
-    
-    @property
-    def DATABASE_FILE(cls):
-        # 默认放在 backend_api_python/data 目录（更干净，也与 docker-compose 挂载一致）
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        default_path = os.path.join(base_dir, 'data', 'quantdinger.db')
-        return os.getenv('SQLITE_DATABASE_FILE', default_path)
-
-
-class SQLiteConfig(metaclass=MetaSQLiteConfig):
-    """SQLite 数据库配置"""
-    
-    @classmethod
-    def get_path(cls) -> str:
-        """获取数据库文件路径"""
-        return cls.DATABASE_FILE
-
-
 class MetaCacheConfig(type):
     """缓存业务配置"""
     

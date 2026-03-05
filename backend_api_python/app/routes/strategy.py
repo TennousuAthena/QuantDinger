@@ -640,7 +640,7 @@ def test_connection():
     Test exchange connection.
     
     Request body:
-        exchange_config: Exchange configuration
+        exchange_config: Exchange configuration (may contain credential_id or inline keys)
     """
     try:
         data = request.get_json() or {}
@@ -664,29 +664,38 @@ def test_connection():
             logger.error(f"Invalid exchange_config type: {type(exchange_config)}, data: {str(exchange_config)[:200]}")
             # Frontend expects HTTP 200 with {code:0} for business failures.
             return jsonify({'code': 0, 'msg': 'Invalid exchange config format; please check your payload', 'data': None})
-        
-        # 验证必要字段
-        if not exchange_config.get('exchange_id'):
+
+        # Resolve credential_id → full config (merges credential keys with any overrides).
+        # This allows the frontend to send just {credential_id: 5} without raw api_key/secret_key.
+        from app.services.exchange_execution import resolve_exchange_config
+        user_id = g.user_id if hasattr(g, 'user_id') else 1
+        resolved = resolve_exchange_config(exchange_config, user_id=user_id)
+
+        # 验证必要字段 (check resolved config after credential merge)
+        if not resolved.get('exchange_id'):
             return jsonify({'code': 0, 'msg': 'Please select an exchange', 'data': None})
         
-        api_key = exchange_config.get('api_key', '')
-        secret_key = exchange_config.get('secret_key', '')
+        api_key = resolved.get('api_key', '')
+        secret_key = resolved.get('secret_key', '')
         
         # 详细日志排查
-        logger.info(f"Testing connection: exchange_id={exchange_config.get('exchange_id')}")
-        logger.info(f"API Key: {api_key[:5]}... (len={len(api_key)})")
-        logger.info(f"Secret Key: {secret_key[:5]}... (len={len(secret_key)})")
+        logger.info(f"Testing connection: exchange_id={resolved.get('exchange_id')}")
+        if api_key:
+            logger.info(f"API Key: {api_key[:5]}... (len={len(api_key)})")
+        if secret_key:
+            logger.info(f"Secret Key: {secret_key[:5]}... (len={len(secret_key)})")
         
         # 检查是否有特殊字符
-        if api_key.strip() != api_key:
+        if api_key and api_key.strip() != api_key:
             logger.warning("API key contains leading/trailing whitespace")
-        if secret_key.strip() != secret_key:
+        if secret_key and secret_key.strip() != secret_key:
             logger.warning("Secret key contains leading/trailing whitespace")
             
         if not api_key or not secret_key:
             return jsonify({'code': 0, 'msg': 'Please provide API key and secret key', 'data': None})
         
-        result = get_strategy_service().test_exchange_connection(exchange_config)
+        # Pass the resolved config (with actual keys) to the service
+        result = get_strategy_service().test_exchange_connection(resolved)
         
         if result['success']:
             return jsonify({'code': 1, 'msg': result.get('message') or 'Connection successful', 'data': result.get('data')})

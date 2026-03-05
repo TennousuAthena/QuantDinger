@@ -1656,6 +1656,12 @@ def _analyze_opportunities_crypto(opportunities: list):
         crypto_data = _fetch_crypto_prices()
         if crypto_data:
             _set_cached("crypto_prices", crypto_data)
+    
+    if not crypto_data:
+        logger.warning("_analyze_opportunities_crypto: No crypto data available")
+        return
+
+    logger.debug(f"_analyze_opportunities_crypto: Analyzing {len(crypto_data)} crypto coins")
 
     for coin in (crypto_data or [])[:20]:
         change = _safe_float(coin.get("change_24h", 0))
@@ -1669,12 +1675,13 @@ def _analyze_opportunities_crypto(opportunities: list):
         reason = ""
         impact = "neutral"
 
+        # Lower thresholds to show more opportunities
         if change > 15:
             signal = "overbought"
             strength = "strong"
             reason = f"24h涨幅{change:.1f}%，7日涨幅{change_7d:.1f}%，短期超买风险"
             impact = "bearish"
-        elif change > 8:
+        elif change > 5:  # Lowered from 8 to 5
             signal = "bullish_momentum"
             strength = "medium"
             reason = f"24h涨幅{change:.1f}%，上涨动能强劲"
@@ -1684,7 +1691,7 @@ def _analyze_opportunities_crypto(opportunities: list):
             strength = "strong"
             reason = f"24h跌幅{abs(change):.1f}%，可能超卖反弹"
             impact = "bullish"
-        elif change < -8:
+        elif change < -5:  # Lowered from -8 to -5
             signal = "bearish_momentum"
             strength = "medium"
             reason = f"24h跌幅{abs(change):.1f}%，下跌趋势明显"
@@ -1713,6 +1720,12 @@ def _analyze_opportunities_stocks(opportunities: list):
         stock_data = _fetch_stock_opportunity_prices()
         if stock_data:
             _set_cached("stock_opportunity_prices", stock_data, 3600)
+    
+    if not stock_data:
+        logger.warning("_analyze_opportunities_stocks: No stock data available")
+        return
+
+    logger.debug(f"_analyze_opportunities_stocks: Analyzing {len(stock_data)} stocks")
 
     for stock in (stock_data or []):
         change = _safe_float(stock.get("change", 0))
@@ -1731,7 +1744,7 @@ def _analyze_opportunities_stocks(opportunities: list):
             strength = "strong"
             reason = f"日涨幅{change:.1f}%，短期涨幅较大，注意回调风险"
             impact = "bearish"
-        elif change > 3:
+        elif change > 2:  # Lowered from 3 to 2
             signal = "bullish_momentum"
             strength = "medium"
             reason = f"日涨幅{change:.1f}%，上涨动能强劲"
@@ -1741,7 +1754,7 @@ def _analyze_opportunities_stocks(opportunities: list):
             strength = "strong"
             reason = f"日跌幅{abs(change):.1f}%，可能超卖反弹"
             impact = "bullish"
-        elif change < -3:
+        elif change < -2:  # Lowered from -3 to -2
             signal = "bearish_momentum"
             strength = "medium"
             reason = f"日跌幅{abs(change):.1f}%，下跌趋势明显"
@@ -1769,6 +1782,12 @@ def _analyze_opportunities_forex(opportunities: list):
         forex_data = _fetch_forex_pairs()
         if forex_data:
             _set_cached("forex_pairs", forex_data, 3600)
+    
+    if not forex_data:
+        logger.warning("_analyze_opportunities_forex: No forex data available")
+        return
+
+    logger.debug(f"_analyze_opportunities_forex: Analyzing {len(forex_data)} forex pairs")
 
     for pair in (forex_data or []):
         change = _safe_float(pair.get("change", 0))
@@ -1787,7 +1806,7 @@ def _analyze_opportunities_forex(opportunities: list):
             strength = "strong"
             reason = f"日涨幅{change:.2f}%，汇率波动剧烈，注意回调"
             impact = "bearish"
-        elif change > 0.8:
+        elif change > 0.5:  # Lowered from 0.8 to 0.5
             signal = "bullish_momentum"
             strength = "medium"
             reason = f"日涨幅{change:.2f}%，上涨动能较强"
@@ -1797,7 +1816,7 @@ def _analyze_opportunities_forex(opportunities: list):
             strength = "strong"
             reason = f"日跌幅{abs(change):.2f}%，汇率波动剧烈，可能反弹"
             impact = "bullish"
-        elif change < -0.8:
+        elif change < -0.5:  # Lowered from -0.8 to -0.5
             signal = "bearish_momentum"
             strength = "medium"
             reason = f"日跌幅{abs(change):.2f}%，下跌趋势明显"
@@ -1818,11 +1837,61 @@ def _analyze_opportunities_forex(opportunities: list):
             })
 
 
+def _analyze_opportunities_polymarket(opportunities: list):
+    """扫描预测市场机会"""
+    try:
+        from app.data_sources.polymarket import PolymarketDataSource
+        from app.services.polymarket_analyzer import PolymarketAnalyzer
+        
+        polymarket_source = PolymarketDataSource()
+        analyzer = PolymarketAnalyzer()
+        
+        # 获取热门市场
+        markets = polymarket_source.get_trending_markets(limit=20)
+        
+        for market in markets:
+            try:
+                # AI分析
+                analysis = analyzer.analyze_market(market['market_id'])
+                
+                if analysis.get('error'):
+                    continue
+                
+                # 只添加高分机会
+                if analysis.get('opportunity_score', 0) > 75:
+                    opportunities.append({
+                        "symbol": market['question'][:50],  # 简化显示
+                        "name": market['question'],
+                        "price": market['current_probability'],
+                        "change_24h": 0,  # 预测市场没有24h涨跌幅概念
+                        "signal": "prediction_opportunity",
+                        "strength": "strong" if analysis.get('opportunity_score', 0) > 85 else "medium",
+                        "reason": f"AI预测概率{analysis.get('ai_predicted_probability', 0):.1f}%，市场概率{market['current_probability']:.1f}%，差异{analysis.get('divergence', 0):.1f}%",
+                        "impact": "bullish" if analysis.get('recommendation') == "YES" else "bearish",
+                        "market": "PredictionMarket",
+                        "market_id": market['market_id'],
+                        "ai_analysis": {
+                            "predicted_probability": analysis.get('ai_predicted_probability', 0),
+                            "recommendation": analysis.get('recommendation', 'HOLD'),
+                            "confidence_score": analysis.get('confidence_score', 0),
+                            "opportunity_score": analysis.get('opportunity_score', 0)
+                        },
+                        "timestamp": int(time.time())
+                    })
+            except Exception as e:
+                logger.debug(f"Failed to analyze polymarket {market.get('market_id')}: {e}")
+                continue
+                
+    except Exception as e:
+        logger.error(f"_analyze_opportunities_polymarket failed: {e}")
+
+
 @global_market_bp.route("/opportunities", methods=["GET"])
 @login_required
 def trading_opportunities():
     """
     Scan for trading opportunities across Crypto, US Stocks, and Forex.
+    Note: Prediction Markets are excluded as they have their own dedicated page.
     Cached for 1 hour. Pass ?force=true to skip cache.
     """
     try:
@@ -1836,16 +1905,36 @@ def trading_opportunities():
         opportunities = []
 
         # 1) Crypto
-        _analyze_opportunities_crypto(opportunities)
+        try:
+            _analyze_opportunities_crypto(opportunities)
+            crypto_count = len([o for o in opportunities if o.get("market") == "Crypto"])
+            logger.info(f"Trading opportunities: found {crypto_count} crypto opportunities")
+        except Exception as e:
+            logger.error(f"Failed to analyze crypto opportunities: {e}", exc_info=True)
 
         # 2) US Stocks
-        _analyze_opportunities_stocks(opportunities)
+        try:
+            _analyze_opportunities_stocks(opportunities)
+            stock_count = len([o for o in opportunities if o.get("market") == "USStock"])
+            logger.info(f"Trading opportunities: found {stock_count} US stock opportunities")
+        except Exception as e:
+            logger.error(f"Failed to analyze stock opportunities: {e}", exc_info=True)
 
         # 3) Forex
-        _analyze_opportunities_forex(opportunities)
+        try:
+            _analyze_opportunities_forex(opportunities)
+            forex_count = len([o for o in opportunities if o.get("market") == "Forex"])
+            logger.info(f"Trading opportunities: found {forex_count} forex opportunities")
+        except Exception as e:
+            logger.error(f"Failed to analyze forex opportunities: {e}", exc_info=True)
+
+        # Note: Prediction Markets are excluded from trading opportunities radar
+        # as they have their own dedicated page at /polymarket
 
         # Sort by absolute change descending
         opportunities.sort(key=lambda x: abs(x.get("change_24h", 0)), reverse=True)
+
+        logger.info(f"Trading opportunities: total {len(opportunities)} opportunities found (Crypto: {len([o for o in opportunities if o.get('market') == 'Crypto'])}, USStock: {len([o for o in opportunities if o.get('market') == 'USStock'])}, Forex: {len([o for o in opportunities if o.get('market') == 'Forex'])})")
 
         _set_cached("trading_opportunities", opportunities, 3600)
 
