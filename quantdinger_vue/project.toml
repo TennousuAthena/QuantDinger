@@ -1,0 +1,49 @@
+# Frontend Vue project configuration
+
+[_]
+schema-version = "0.2"
+
+[io.buildpacks]
+# Node.js buildpack configuration
+include = ["paketo-buildpacks/nodejs"]
+
+[[io.buildpacks.group]]
+id = "paketo-buildpacks/nodejs"
+version = "latest"
+
+# Project metadata
+[project]
+id = "quantdinger-frontend"
+name = "QuantDinger Frontend"
+version = "3.0.4"
+description = "QuantDinger Vue Frontend"
+
+# Build configuration
+[[build.env]]
+name = "BP_NODE_VERSION"
+value = "18"
+
+[[build.env]]
+name = "BP_NPM_VERSION"
+value = "latest"
+
+# Build command
+[[build.env]]
+name = "BP_NODE_BUILD_COMMANDS"
+value = "npm run build"
+
+# Runtime configuration
+[[processes]]
+type = "web"
+command = "npm run serve"
+default = true
+
+[[processes]]
+type = "build"
+command = "npm run build"
+
+# Development settings
+[dev]
+hot_reload = true
+watch_paths = ["src", "public", "config"]
+debug_mode = true

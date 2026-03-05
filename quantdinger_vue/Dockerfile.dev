@@ -1,0 +1,25 @@
+# QuantDinger Frontend Development Dockerfile
+# Supports hot reload via Vue CLI serve mode
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Install dependencies for native modules
+RUN apk add --no-cache python3 make g++
+
+# Copy package files
+COPY package*.json ./
+COPY pnpm-lock.yaml* ./
+COPY yarn.lock* ./
+
+# Install dependencies
+RUN npm install --legacy-peer-deps
+
+# Expose development server port
+EXPOSE 8000
+
+# Environment variables for development
+ENV NODE_ENV=development
+
+# Start development server with hot reload
+CMD ["npm", "run", "serve"]
