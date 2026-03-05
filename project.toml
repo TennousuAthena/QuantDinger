@@ -1,0 +1,54 @@
+# Project configuration for Cloud Native Buildpacks
+# This file defines how the project should be built and run
+
+[_]
+schema-version = "0.2"
+
+[io.buildpacks]
+# Buildpacks group for the project
+include = [
+    "paketo-buildpacks/python",
+    "paketo-buildpacks/nodejs",
+    "paketo-buildpacks/nginx"
+]
+
+[[io.buildpacks.group]]
+id = "paketo-buildpacks/python"
+version = "latest"
+
+[[io.buildpacks.group]]
+id = "paketo-buildpacks/nodejs"
+version = "latest"
+
+# Project metadata
+[project]
+id = "quantdinger"
+name = "QuantDinger"
+version = "2.0.0"
+authors = ["QuantDinger Team"]
+description = "AI-powered quantitative trading platform"
+documentation-url = "https://github.com/QuantDinger/QuantDinger"
+source-url = "https://github.com/QuantDinger/QuantDinger"
+
+# Build configuration
+[[build.env]]
+name = "BP_PYTHON_VERSION"
+value = "3.12"
+
+[[build.env]]
+name = "BP_NODE_VERSION"
+value = "18"
+
+[[build.env]]
+name = "BP_NGINX_VERSION"
+value = "1.25"
+
+# Runtime configuration
+[[processes]]
+type = "web"
+command = "python run.py"
+default = true
+
+[[processes]]
+type = "worker"
+command = "python -m app.services.trading_executor"

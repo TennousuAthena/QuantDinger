@@ -1,0 +1,40 @@
+# Backend API Python project configuration
+
+[_]
+schema-version = "0.2"
+
+[io.buildpacks]
+# Python buildpack configuration
+include = ["paketo-buildpacks/python"]
+
+[[io.buildpacks.group]]
+id = "paketo-buildpacks/python"
+version = "latest"
+
+# Project metadata
+[project]
+id = "quantdinger-backend"
+name = "QuantDinger Backend API"
+version = "2.0.0"
+description = "QuantDinger Python Backend API"
+
+# Build configuration
+[[build.env]]
+name = "BP_PYTHON_VERSION"
+value = "3.12"
+
+[[build.env]]
+name = "BP_PIP_VERSION"
+value = "latest"
+
+# Runtime configuration
+[[processes]]
+type = "web"
+command = "python run.py"
+default = true
+
+# Development settings
+[dev]
+hot_reload = true
+watch_paths = ["app", "run.py"]
+debug_mode = true

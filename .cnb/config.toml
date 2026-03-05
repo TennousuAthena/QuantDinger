@@ -1,0 +1,38 @@
+# CNB Configuration
+# Cloud Native Buildpacks configuration for QuantDinger
+
+[project]
+name = "quantdinger"
+version = "2.0.0"
+
+[project.metadata]
+description = "QuantDinger - AI-powered quantitative trading platform"
+maintainer = "QuantDinger Team"
+
+# Development environment configuration
+[dev]
+# Docker Compose file for development
+compose_file = "docker-compose.dev.yml"
+
+# Hot reload settings
+[dev.hot_reload]
+enabled = true
+backend_watch_paths = ["backend_api_python/app", "backend_api_python/run.py"]
+frontend_watch_paths = ["quantdinger_vue/src", "quantdinger_vue/public", "quantdinger_vue/config"]
+
+# Build configuration
+[build]
+# Production compose file
+compose_file = "docker-compose.yml"
+
+# Environment variables
+[env]
+POSTGRES_DB = "quantdinger"
+POSTGRES_USER = "quantdinger"
+POSTGRES_PASSWORD = "quantdinger123"
+
+# Service ports
+[ports]
+backend = 5000
+frontend = 8888
+postgres = 5432

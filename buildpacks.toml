@@ -1,0 +1,29 @@
+# Buildpacks configuration for QuantDinger
+# This file defines the buildpacks used for building the project
+
+[buildpacks]
+# Use Paketo buildpacks for Python and Node.js
+python = { id = "paketo-buildpacks/python", version = "latest" }
+nodejs = { id = "paketo-buildpacks/nodejs", version = "latest" }
+nginx = { id = "paketo-buildpacks/nginx", version = "latest" }
+
+# Buildpack order for multi-language project
+[[order]]
+group = [
+    { id = "paketo-buildpacks/python", version = "latest" }
+]
+
+[[order]]
+group = [
+    { id = "paketo-buildpacks/nodejs", version = "latest" }
+]
+
+# Build configuration
+[build]
+cache = true
+cache-dir = ".cnb/cache"
+
+# Output configuration
+[output]
+type = "image"
+registry = "docker.io"
