@@ -314,11 +314,6 @@ def start_ai_calibration_worker() -> None:
     """
     Run offline calibration once on service startup (best-effort).
     """
-    is_demo_mode = os.getenv("IS_DEMO_MODE", "false").lower() == "true"
-    if is_demo_mode:
-        logger.info("AI calibration worker skipped in demo mode.")
-        return
-
     enabled = os.getenv("ENABLE_OFFLINE_AI_CALIBRATION", "true").lower() == "true"
     if not enabled:
         logger.info("AI calibration worker disabled (ENABLE_OFFLINE_AI_CALIBRATION=false).")

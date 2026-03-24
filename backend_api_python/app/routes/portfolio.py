@@ -576,6 +576,25 @@ def add_monitor():
             db.commit()
             cur.close()
 
+        # 创建后立即在后台跑一轮：立刻发通知，并以完成时刻为基准写入 next_run_at（间隔后再次执行）
+        if is_active and monitor_id:
+            try:
+                from app.services.portfolio_monitor import run_single_monitor as _run_single_monitor
+
+                def _initial_run():
+                    try:
+                        _run_single_monitor(int(monitor_id), user_id=int(user_id))
+                    except Exception as ex:
+                        logger.error(f"Initial portfolio monitor run failed #{monitor_id}: {ex}")
+
+                threading.Thread(
+                    target=_initial_run,
+                    daemon=True,
+                    name=f"monitor-init-{monitor_id}",
+                ).start()
+            except Exception as ex:
+                logger.error(f"Failed to schedule initial monitor run #{monitor_id}: {ex}")
+
         return jsonify({'code': 1, 'msg': 'success', 'data': {'id': monitor_id}})
     except Exception as e:
         logger.error(f"add_monitor failed: {str(e)}")

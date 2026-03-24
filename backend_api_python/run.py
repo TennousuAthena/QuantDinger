@@ -91,14 +91,6 @@ def main():
         print(msg)
         raise RuntimeError("Insecure SECRET_KEY configuration: using default example value in non-debug mode")
     
-    # Check demo mode status for debugging
-    demo_status = os.getenv('IS_DEMO_MODE', 'false').lower()
-    print(f"Status Check: IS_DEMO_MODE={demo_status}")
-    if demo_status == 'true':
-        print("!!! RUNNING IN DEMO MODE (READ-ONLY) !!!")
-    else:
-        print("Running in FULL ACCESS mode")
-        
     print(f"Service starting at: http://{Config.HOST}:{Config.PORT}")
     
     # Flask dev server is for local development only.

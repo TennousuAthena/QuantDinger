@@ -129,7 +129,6 @@ def login():
         if not allowed:
             return jsonify({'code': 0, 'msg': block_msg, 'data': {'blocked': True}}), 429
         
-        is_demo = os.getenv('IS_DEMO_MODE', 'false').lower() == 'true'
         user = None
         
         # Step 3: Authenticate
@@ -206,9 +205,8 @@ def login():
         userinfo = {
             'id': user.get('id') or user.get('user_id', 1),
             'username': user.get('username', username),
-            'nickname': user.get('nickname', 'User') + (' (Demo)' if is_demo else ''),
+            'nickname': user.get('nickname', 'User'),
             'avatar': user.get('avatar', '/avatar2.jpg'),
-            'is_demo': is_demo,
             'role': {
                 'id': user.get('role', 'admin'),
                 'permissions': _get_permissions(user.get('role', 'admin'))
@@ -409,8 +407,6 @@ def login_with_code():
         # Log login
         security.log_security_event('login_via_code', user['id'], ip_address, user_agent)
         
-        is_demo = os.getenv('IS_DEMO_MODE', 'false').lower() == 'true'
-        
         return jsonify({
             'code': 1,
             'msg': 'Login successful' + (' (new account created)' if is_new_user else ''),
@@ -420,10 +416,9 @@ def login_with_code():
                 'userinfo': {
                     'id': user['id'],
                     'username': user['username'],
-                    'nickname': user.get('nickname', user['username']) + (' (Demo)' if is_demo else ''),
+                    'nickname': user.get('nickname', user['username']),
                     'email': user.get('email'),
                     'avatar': user.get('avatar', '/avatar2.jpg'),
-                    'is_demo': is_demo,
                     'role': {
                         'id': user.get('role', 'user'),
                         'permissions': _get_permissions(user.get('role', 'user'))
@@ -679,8 +674,6 @@ def register():
             token_version=new_token_version
         )
         
-        is_demo = os.getenv('IS_DEMO_MODE', 'false').lower() == 'true'
-        
         return jsonify({
             'code': 1,
             'msg': 'Registration successful',
@@ -692,7 +685,6 @@ def register():
                     'nickname': username,
                     'email': email,
                     'avatar': '/avatar2.jpg',
-                    'is_demo': is_demo,
                     'role': {
                         'id': 'user',
                         'permissions': _get_permissions('user')
@@ -1034,8 +1026,6 @@ def logout():
 def get_user_info():
     """Get current user info."""
     try:
-        is_demo = os.getenv('IS_DEMO_MODE', 'false').lower() == 'true'
-        
         user_id = getattr(g, 'user_id', 1)
         username = getattr(g, 'user', Config.ADMIN_USER)
         role = getattr(g, 'user_role', 'admin')
@@ -1056,10 +1046,9 @@ def get_user_info():
                 'data': {
                     'id': user_data.get('id'),
                     'username': user_data.get('username'),
-                    'nickname': user_data.get('nickname', 'User') + (' (Demo)' if is_demo else ''),
+                    'nickname': user_data.get('nickname', 'User'),
                     'email': user_data.get('email'),
                     'avatar': user_data.get('avatar', '/avatar2.jpg'),
-                    'is_demo': is_demo,
                     'role': {
                         'id': user_data.get('role', 'user'),
                         'permissions': _get_permissions(user_data.get('role', 'user'))
@@ -1074,9 +1063,8 @@ def get_user_info():
             'data': {
                 'id': user_id,
                 'username': username,
-                'nickname': 'Admin' + (' (Demo)' if is_demo else ''),
+                'nickname': 'Admin',
                 'avatar': '/avatar2.jpg',
-                'is_demo': is_demo,
                 'role': {
                     'id': role,
                     'permissions': _get_permissions(role)

@@ -650,6 +650,7 @@ def update_notification_settings():
             'email': str(data.get('email') or '').strip(),
             'discord_webhook': str(data.get('discord_webhook') or '').strip(),
             'webhook_url': str(data.get('webhook_url') or '').strip(),
+            'webhook_token': str(data.get('webhook_token') or '').strip(),
             'phone': str(data.get('phone') or '').strip(),
         }
         
@@ -674,6 +675,85 @@ def update_notification_settings():
         })
     except Exception as e:
         logger.error(f"update_notification_settings failed: {e}")
+        return jsonify({'code': 0, 'msg': str(e), 'data': None}), 500
+
+
+@user_bp.route('/notification-settings/test', methods=['POST'])
+@login_required
+def test_notification_settings():
+    """
+    Send a test notification using the current user's saved notification_settings
+    (save settings first via PUT /notification-settings).
+    """
+    try:
+        import json
+        from app.services.signal_notifier import SignalNotifier
+        from app.utils.db import get_db_connection
+
+        user_id = getattr(g, 'user_id', None)
+        if not user_id:
+            return jsonify({'code': 0, 'msg': 'Not authenticated', 'data': None}), 401
+
+        with get_db_connection() as db:
+            cur = db.cursor()
+            cur.execute("SELECT notification_settings, email FROM qd_users WHERE id = ?", (user_id,))
+            row = cur.fetchone()
+            cur.close()
+
+        if not row:
+            return jsonify({'code': 0, 'msg': 'User not found', 'data': None}), 404
+
+        settings_str = row.get('notification_settings') or ''
+        account_email = (row.get('email') or '').strip()
+        settings = {}
+        if settings_str:
+            try:
+                settings = json.loads(settings_str)
+            except Exception:
+                settings = {}
+
+        channels = settings.get('default_channels') or ['browser']
+        if not isinstance(channels, list) or not channels:
+            channels = ['browser']
+
+        notify_email = (settings.get('email') or '').strip() or account_email
+        targets = {
+            'telegram': (settings.get('telegram_chat_id') or '').strip(),
+            'telegram_bot_token': (settings.get('telegram_bot_token') or '').strip(),
+            'email': notify_email,
+            'phone': (settings.get('phone') or '').strip(),
+            'discord': (settings.get('discord_webhook') or '').strip(),
+            'webhook': (settings.get('webhook_url') or '').strip(),
+            'webhook_token': (settings.get('webhook_token') or '').strip(),
+        }
+
+        accept = (request.headers.get('Accept-Language') or '') + ' ' + (request.headers.get('X-Locale') or '')
+        language = 'zh-CN' if 'zh' in accept.lower() else 'en-US'
+
+        notifier = SignalNotifier()
+        results = notifier.send_profile_test_notifications(
+            user_id=int(user_id),
+            channels=channels,
+            targets=targets,
+            language=language,
+        )
+
+        any_ok = any((v or {}).get('ok') for v in results.values())
+        failed = [k for k, v in results.items() if not (v or {}).get('ok')]
+        if failed:
+            err_detail = {k: (results.get(k) or {}).get('error', '') for k in failed}
+            logger.warning("notification_settings test: user_id=%s failed_channels=%s errors=%s", user_id, failed, err_detail)
+
+        if not any_ok:
+            detail = '; '.join(f"{k}: {(results[k] or {}).get('error', '')}" for k in failed) or 'all channels failed'
+            return jsonify({'code': 0, 'msg': detail, 'data': {'results': results}})
+
+        msg = 'Test notification sent'
+        if failed:
+            msg = f"Sent OK; failed: {', '.join(failed)}"
+        return jsonify({'code': 1, 'msg': msg, 'data': {'results': results}})
+    except Exception as e:
+        logger.error(f"test_notification_settings failed: {e}")
         return jsonify({'code': 0, 'msg': str(e), 'data': None}), 500
 
 

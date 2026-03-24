@@ -31,11 +31,13 @@ class OkxClient(BaseRestClient):
         base_url: str = "https://www.okx.com",
         timeout_sec: float = 15.0,
         broker_code: Optional[str] = None,
+        simulated_trading: bool = False,
     ):
         super().__init__(base_url=base_url, timeout_sec=timeout_sec)
         self.api_key = (api_key or "").strip()
         self.secret_key = (secret_key or "").strip()
         self.passphrase = (passphrase or "").strip()
+        self.simulated_trading = bool(simulated_trading)
         effective_broker = broker_code or self._DEFAULT_BROKER_CODE
         self.broker_code = str(effective_broker).strip() if effective_broker else None
         if not self.api_key or not self.secret_key or not self.passphrase:
@@ -270,13 +272,16 @@ class OkxClient(BaseRestClient):
         return base64.b64encode(mac).decode("utf-8")
 
     def _headers(self, ts: str, sign: str) -> Dict[str, str]:
-        return {
+        h: Dict[str, str] = {
             "OK-ACCESS-KEY": self.api_key,
             "OK-ACCESS-SIGN": sign,
             "OK-ACCESS-TIMESTAMP": ts,
             "OK-ACCESS-PASSPHRASE": self.passphrase,
             "Content-Type": "application/json",
         }
+        if self.simulated_trading:
+            h["x-simulated-trading"] = "1"
+        return h
 
     def _signed_request(
         self,

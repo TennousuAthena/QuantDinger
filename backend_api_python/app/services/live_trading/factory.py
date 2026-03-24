@@ -46,6 +46,13 @@ def _get(cfg: Dict[str, Any], *keys: str) -> str:
     return ""
 
 
+def _demo_enabled(cfg: Dict[str, Any]) -> bool:
+    v = cfg.get("enable_demo_trading") or cfg.get("enableDemoTrading")
+    if isinstance(v, bool):
+        return v
+    return str(v or "").strip().lower() in ("true", "1", "yes")
+
+
 def create_client(exchange_config: Dict[str, Any], *, market_type: str = "swap") -> BaseRestClient:
     if not isinstance(exchange_config, dict):
         raise LiveTradingError("Invalid exchange_config")
@@ -58,16 +65,14 @@ def create_client(exchange_config: Dict[str, Any], *, market_type: str = "swap")
     if mt in ("futures", "future", "perp", "perpetual"):
         mt = "swap"
 
+    is_demo = _demo_enabled(exchange_config)
+
     if exchange_id == "binance":
-        # 检查是否启用模拟交易，支持布尔值和字符串
-        enable_demo = exchange_config.get("enable_demo_trading") or exchange_config.get("enableDemoTrading")
-        is_demo = bool(enable_demo) if isinstance(enable_demo, bool) else str(enable_demo).lower() in ("true", "1", "yes")
-        
         if mt == "spot":
             default_url = "https://demo-api.binance.com" if is_demo else "https://api.binance.com"
             base_url = _get(exchange_config, "base_url", "baseUrl") or default_url
             return BinanceSpotClient(api_key=api_key, secret_key=secret_key, base_url=base_url, enable_demo_trading=is_demo)
-        # Default to USDT-M futures  
+        # Default to USDT-M futures
         default_url = "https://demo-fapi.binance.com" if is_demo else "https://fapi.binance.com"
         base_url = _get(exchange_config, "base_url", "baseUrl") or default_url
         return BinanceFuturesClient(api_key=api_key, secret_key=secret_key, base_url=base_url, enable_demo_trading=is_demo)
@@ -79,9 +84,11 @@ def create_client(exchange_config: Dict[str, Any], *, market_type: str = "swap")
             secret_key=secret_key,
             passphrase=passphrase,
             base_url=base_url,
-            broker_code=broker_code
+            broker_code=broker_code,
+            simulated_trading=is_demo,
         )
     if exchange_id == "bitget":
+        # Bitget simulated trading uses the same REST host; keys must be created in Bitget demo trading.
         base_url = _get(exchange_config, "base_url", "baseUrl") or "https://api.bitget.com"
         if mt == "spot":
             channel_api_code = _get(exchange_config, "channel_api_code", "channelApiCode") or "qvz9x"
@@ -90,7 +97,8 @@ def create_client(exchange_config: Dict[str, Any], *, market_type: str = "swap")
         return BitgetMixClient(api_key=api_key, secret_key=secret_key, passphrase=passphrase, base_url=base_url, channel_api_code=channel_api_code)
 
     if exchange_id == "bybit":
-        base_url = _get(exchange_config, "base_url", "baseUrl") or "https://api.bybit.com"
+        default_bybit = "https://api-testnet.bybit.com" if is_demo else "https://api.bybit.com"
+        base_url = _get(exchange_config, "base_url", "baseUrl") or default_bybit
         category = "spot" if mt == "spot" else "linear"
         recv_window_ms = int(exchange_config.get("recv_window_ms") or exchange_config.get("recvWindow") or 5000)
         return BybitClient(
@@ -102,7 +110,8 @@ def create_client(exchange_config: Dict[str, Any], *, market_type: str = "swap")
         )
 
     if exchange_id in ("coinbaseexchange", "coinbase_exchange"):
-        base_url = _get(exchange_config, "base_url", "baseUrl") or "https://api.exchange.coinbase.com"
+        default_cb = "https://api-public.sandbox.exchange.coinbase.com" if is_demo else "https://api.exchange.coinbase.com"
+        base_url = _get(exchange_config, "base_url", "baseUrl") or default_cb
         if mt != "spot":
             raise LiveTradingError("CoinbaseExchange only supports spot market_type in this project")
         return CoinbaseExchangeClient(api_key=api_key, secret_key=secret_key, passphrase=passphrase, base_url=base_url)
@@ -110,26 +119,32 @@ def create_client(exchange_config: Dict[str, Any], *, market_type: str = "swap")
     if exchange_id == "kraken":
         base_url = _get(exchange_config, "base_url", "baseUrl") or "https://api.kraken.com"
         if mt == "spot":
+            # Kraken spot REST has no separate public sandbox URL; use demo keys on production API if offered by Kraken.
             return KrakenClient(api_key=api_key, secret_key=secret_key, base_url=base_url)
-        # Futures/perp
-        fut_url = _get(exchange_config, "futures_base_url", "futuresBaseUrl") or "https://futures.kraken.com"
+        fut_default = "https://demo-futures.kraken.com" if is_demo else "https://futures.kraken.com"
+        fut_url = _get(exchange_config, "futures_base_url", "futuresBaseUrl") or fut_default
         return KrakenFuturesClient(api_key=api_key, secret_key=secret_key, base_url=fut_url)
 
     if exchange_id == "kucoin":
-        base_url = _get(exchange_config, "base_url", "baseUrl") or "https://api.kucoin.com"
+        default_spot = "https://openapi-sandbox.kucoin.com" if is_demo else "https://api.kucoin.com"
+        base_url = _get(exchange_config, "base_url", "baseUrl") or default_spot
         if mt == "spot":
             return KucoinSpotClient(api_key=api_key, secret_key=secret_key, passphrase=passphrase, base_url=base_url)
-        fut_url = _get(exchange_config, "futures_base_url", "futuresBaseUrl") or "https://api-futures.kucoin.com"
+        fut_default = "https://api-sandbox-futures.kucoin.com" if is_demo else "https://api-futures.kucoin.com"
+        fut_url = _get(exchange_config, "futures_base_url", "futuresBaseUrl") or fut_default
         return KucoinFuturesClient(api_key=api_key, secret_key=secret_key, passphrase=passphrase, base_url=fut_url)
 
     if exchange_id == "gate":
-        base_url = _get(exchange_config, "base_url", "baseUrl") or "https://api.gateio.ws"
         if mt == "spot":
+            default_gate = "https://api-testnet.gateio.ws" if is_demo else "https://api.gateio.ws"
+            base_url = _get(exchange_config, "base_url", "baseUrl") or default_gate
             return GateSpotClient(api_key=api_key, secret_key=secret_key, base_url=base_url)
-        # Default to USDT futures for swap
+        default_fut = "https://fx-api-testnet.gateio.ws" if is_demo else "https://api.gateio.ws"
+        base_url = _get(exchange_config, "base_url", "baseUrl") or default_fut
         return GateUsdtFuturesClient(api_key=api_key, secret_key=secret_key, base_url=base_url)
 
     if exchange_id == "bitfinex":
+        # Same REST host; use keys from Bitfinex paper/sub-account where applicable.
         base_url = _get(exchange_config, "base_url", "baseUrl") or "https://api.bitfinex.com"
         if mt == "spot":
             return BitfinexClient(api_key=api_key, secret_key=secret_key, base_url=base_url)

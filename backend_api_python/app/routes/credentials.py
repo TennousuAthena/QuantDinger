@@ -1,18 +1,19 @@
 """
-Exchange credentials vault (local-only).
+Exchange credentials vault.
 
-Local deployment notes:
-- No encryption/decryption is used.
-- Credentials are stored as plaintext JSON in DB (encrypted_config column kept for compatibility).
+encrypted_config stores Fernet ciphertext derived from SECRET_KEY (see app.utils.credential_crypto).
 """
 
 import traceback
 import json
 from flask import Blueprint, request, jsonify, g
 
+import requests as rq
+
 from app.utils.db import get_db_connection
 from app.utils.logger import get_logger
 from app.utils.auth import login_required
+from app.utils.credential_crypto import encrypt_credential_blob, decrypt_credential_blob
 
 logger = get_logger(__name__)
 
@@ -60,6 +61,42 @@ CRYPTO_EXCHANGES = [
     'binance', 'okx', 'bitget', 'bybit', 'coinbaseexchange',
     'kraken', 'kucoin', 'gate', 'bitfinex', 'deepcoin'
 ]
+
+
+def _egress_ipify(url: str) -> str:
+    try:
+        r = rq.get(url, timeout=8)
+        if r.status_code != 200:
+            return ""
+        j = r.json()
+        if not isinstance(j, dict):
+            return ""
+        return str(j.get("ip") or "").strip()
+    except Exception:
+        return ""
+
+
+@credentials_bp.route('/egress-ip', methods=['GET'])
+@login_required
+def get_egress_ip():
+    """
+    Public egress IPv4/IPv6 of this API server (for exchange API key IP whitelist).
+    Uses ipify's v4-only / v6-only endpoints so each family is detected independently.
+    """
+    ipv4 = _egress_ipify("https://api4.ipify.org?format=json")
+    ipv6 = _egress_ipify("https://api6.ipify.org?format=json")
+    return jsonify(
+        {
+            "code": 1,
+            "msg": "success",
+            "data": {
+                "ipv4": ipv4 or None,
+                "ipv6": ipv6 or None,
+                # 兼容旧前端：优先 IPv4，否则 IPv6
+                "ip": ipv4 or ipv6 or None,
+            },
+        }
+    )
 
 
 @credentials_bp.route('/create', methods=['POST'])
@@ -121,6 +158,7 @@ def create_credential():
             return jsonify({'code': 0, 'msg': f'Unsupported exchange: {exchange_id}', 'data': None}), 400
 
         plaintext_config = json.dumps(config, ensure_ascii=False)
+        stored_blob = encrypt_credential_blob(plaintext_config)
 
         with get_db_connection() as db:
             cur = db.cursor()
@@ -130,7 +168,7 @@ def create_credential():
                 VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
                 RETURNING id
                 """,
-                (user_id, name, exchange_id, hint, plaintext_config)
+                (user_id, name, exchange_id, hint, stored_blob)
             )
             row = cur.fetchone()
             new_id = (row or {}).get('id')
@@ -198,13 +236,9 @@ def get_credential():
         if not row:
             return jsonify({'code': 0, 'msg': 'Not found', 'data': None}), 404
 
-        decrypted = {}
-        raw = row.get('encrypted_config') or ''
-        if isinstance(raw, str) and raw.strip():
-            try:
-                decrypted = json.loads(raw)
-            except Exception:
-                decrypted = {}
+        raw = row.get('encrypted_config')
+        plain = decrypt_credential_blob(raw)
+        decrypted = json.loads(plain) if plain else {}
         # Ensure exchange_id is present
         decrypted['exchange_id'] = row.get('exchange_id') or decrypted.get('exchange_id')
 

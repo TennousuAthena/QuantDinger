@@ -11,6 +11,7 @@ pymysql>=1.0.2
 SQLAlchemy>=2.0.0
 PyJWT==2.8.0
 python-dotenv>=1.0.1
+cryptography>=41.0.0
 # HD wallet derivation (xpub -> address) for USDT payments
 bip-utils>=2.9.0
 # PostgreSQL support (multi-user mode)

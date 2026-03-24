@@ -274,6 +274,7 @@ class StrategyService:
                 from app.services.live_trading.binance_spot import BinanceSpotClient
                 from app.services.live_trading.okx import OkxClient
                 from app.services.live_trading.bitget import BitgetMixClient
+                from app.services.live_trading.bitget_spot import BitgetSpotClient
                 from app.services.live_trading.bybit import BybitClient
                 from app.services.live_trading.coinbase_exchange import CoinbaseExchangeClient
                 from app.services.live_trading.kraken import KrakenClient
@@ -409,6 +410,8 @@ class StrategyService:
                     elif isinstance(client, BitgetMixClient):
                         product_type = str(resolved.get("product_type") or resolved.get("productType") or "USDT-FUTURES")
                         priv_data = client.get_accounts(product_type=product_type)
+                    elif isinstance(client, BitgetSpotClient):
+                        priv_data = client.get_assets()
                     elif isinstance(client, BybitClient):
                         priv_data = client.get_wallet_balance()
                     elif isinstance(client, CoinbaseExchangeClient):

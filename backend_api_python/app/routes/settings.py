@@ -134,6 +134,14 @@ CONFIG_SCHEMA = {
                 ],
                 'description': 'Select your preferred LLM provider'
             },
+            {
+                'key': 'AI_CODE_GEN_MODEL',
+                'label': 'Code Generation Model',
+                'type': 'text',
+                'default': '',
+                'required': False,
+                'description': 'Optional model override for AI code generation. If empty, uses provider default model'
+            },
             # OpenRouter
             {
                 'key': 'OPENROUTER_API_KEY',

@@ -25,6 +25,7 @@ from flask import Blueprint, g, jsonify, request
 from app.utils.db import get_db_connection
 from app.utils.logger import get_logger
 from app.utils.auth import login_required
+from app.utils.credential_crypto import decrypt_credential_blob
 
 logger = get_logger(__name__)
 
@@ -149,7 +150,12 @@ def _load_credential(credential_id: int, user_id: int) -> Dict[str, Any]:
         )
         row = cur.fetchone() or {}
         cur.close()
-    return _safe_json(row.get("encrypted_config"), {})
+    try:
+        plain = decrypt_credential_blob(row.get("encrypted_config"))
+    except ValueError as e:
+        logger.warning(f"decrypt credential_id={credential_id}: {e}")
+        return {}
+    return _safe_json(plain, {})
 
 
 def _build_exchange_config(credential_id: int, user_id: int, overrides: Dict[str, Any] = None) -> Dict[str, Any]:

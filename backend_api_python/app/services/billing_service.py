@@ -491,15 +491,16 @@ class BillingService:
                     (float(new_balance), user_id)
                 )
                 
-                # 记录日志
+                # 记录日志 - 使用 UTC 时间确保跨时区显示正确
                 feature_name = FEATURE_NAMES.get(feature, feature)
+                created_at_utc = datetime.now(timezone.utc)
                 cur.execute(
                     """
                     INSERT INTO qd_credits_log 
                     (user_id, action, amount, balance_after, feature, reference_id, remark, created_at)
-                    VALUES (?, 'consume', ?, ?, ?, ?, ?, NOW())
+                    VALUES (?, 'consume', ?, ?, ?, ?, ?, ?)
                     """,
-                    (user_id, -cost, float(new_balance), feature, reference_id, f'Consume: {feature_name}')
+                    (user_id, -cost, float(new_balance), feature, reference_id, f'Consume: {feature_name}', created_at_utc)
                 )
                 
                 db.commit()
@@ -686,8 +687,22 @@ class BillingService:
                     """,
                     (user_id, page_size, offset)
                 )
-                logs = cur.fetchall() or []
+                rows = cur.fetchall() or []
                 cur.close()
+
+                # Format created_at as ISO 8601 with Z (UTC) for correct frontend display
+                logs = []
+                for r in rows:
+                    d = dict(r)
+                    if d.get('created_at'):
+                        dt = d['created_at']
+                        if hasattr(dt, 'isoformat'):
+                            if getattr(dt, 'tzinfo', None) is not None:
+                                d['created_at'] = dt.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+                            else:
+                                # 无时区：新记录用 UTC 写入，旧记录可能为服务器本地时间，统一按 UTC 返回以便前端正确转换
+                                d['created_at'] = dt.strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+                    logs.append(d)
                 
                 return {
                     'items': logs,

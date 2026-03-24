@@ -147,6 +147,13 @@ class LLMService:
         
         return PROVIDER_CONFIGS[p]["default_model"]
 
+    def get_code_generation_model(self, provider: LLMProvider = None) -> str:
+        """Get model for AI code generation; fallback to provider default when unset."""
+        model = os.getenv('AI_CODE_GEN_MODEL', '').strip()
+        if model:
+            return model
+        return self.get_default_model(provider)
+
     # Legacy properties for backward compatibility
     @property
     def api_key(self):

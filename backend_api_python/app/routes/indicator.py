@@ -651,7 +651,7 @@ IMPORTANT: Output Python code directly, without explanations, without descriptio
         
         # Get provider and model from env config (no frontend override)
         current_provider = llm.provider
-        current_model = llm.get_default_model()
+        current_model = llm.get_code_generation_model()
         current_api_key = llm.get_api_key()
         base_url = llm.get_base_url()
         
@@ -682,6 +682,7 @@ IMPORTANT: Output Python code directly, without explanations, without descriptio
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
+            model=current_model,
             temperature=temperature,
             use_json_mode=False  # Code generation doesn't need JSON mode
         )
@@ -697,13 +698,15 @@ IMPORTANT: Output Python code directly, without explanations, without descriptio
         
         return content.strip() or _template_code()
 
+    # Capture user_id before generator runs (generator executes outside request context)
+    user_id = g.user_id
     def stream():
         from app.services.billing_service import get_billing_service
         billing = get_billing_service()
         ok, msg = billing.check_and_consume(
-            user_id=g.user_id,
+            user_id=user_id,
             feature='ai_code_gen',
-            reference_id=f"ai_code_gen_{g.user_id}_{int(time.time())}"
+            reference_id=f"ai_code_gen_{user_id}_{int(time.time())}"
         )
         if not ok:
             yield "data: " + json.dumps({"error": f"积分不足: {msg}"}, ensure_ascii=False) + "\n\n"
