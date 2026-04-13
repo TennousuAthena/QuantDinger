@@ -28,6 +28,22 @@
 
 ---
 
+> QuantDinger is a **self-hosted, local-first quantitative trading and algorithmic trading platform** for **AI research, Python strategy generation, backtesting, and live execution**.
+
+## Try in 2 Minutes
+
+**Fastest way to try QuantDinger locally:**
+
+```bash
+git clone https://github.com/brokermr810/QuantDinger.git && cd QuantDinger && cp backend_api_python/env.example backend_api_python/.env && ./scripts/generate-secret-key.sh && docker-compose up -d --build
+```
+
+Then open:
+
+- `http://localhost:8888`
+- login with `quantdinger` / `123456`
+- read `backend_api_python/.env` before production use
+
 ## What Is QuantDinger?
 
 QuantDinger is a **self-hosted AI trading platform** and **quant research workspace** for teams and operators who want one system for:
@@ -41,7 +57,7 @@ QuantDinger is a **self-hosted AI trading platform** and **quant research worksp
 
 If you are searching for an **open source quant platform**, **AI trading research stack**, **self-hosted backtesting system**, or **natural-language-to-Python strategy workflow**, this is what QuantDinger is built for.
 
-## Why QuantDinger
+## Why QuantDinger? AI-Powered Quantitative Trading and Backtesting
 
 - **Self-hosted by design**: your credentials, strategy code, market workflows, and operational data stay under your control.
 - **Research to execution in one product**: AI analysis, charting, strategy logic, backtests, quick trade, and live operations are connected.
@@ -73,6 +89,14 @@ QuantDinger gives you something most trading tools do not:
 - **Python strategy developers** who want charting, backtests, and live execution in one environment.
 - **Small teams and studios** building internal trading tools or private research platforms.
 - **Operators and founders** who need a deployable product with user management, billing, and admin controls.
+
+## Use Cases
+
+- **AI-assisted market research** for crypto, stocks, forex, and cross-market workflows
+- **Python-native strategy development** for quantitative trading and algorithmic trading teams
+- **Backtesting and iteration** for signal strategies, saved strategies, and execution assumptions
+- **Private trading infrastructure** for teams that want self-hosted deployment and privacy-first operations
+- **Commercial trading products** that need users, billing, credits, and admin controls
 
 ## Visual Tour
 
@@ -340,6 +364,37 @@ FRONTEND_PORT=3000
 BACKEND_PORT=127.0.0.1:5001
 IMAGE_PREFIX=docker.m.daocloud.io/library/
 ```
+
+## Minimal Example: Python Indicator Strategy
+
+This is the kind of Python-native strategy logic QuantDinger is designed for:
+
+```python
+# @param sma_short int 14 Short moving average
+# @param sma_long int 28 Long moving average
+
+sma_short_period = params.get('sma_short', 14)
+sma_long_period = params.get('sma_long', 28)
+
+my_indicator_name = "Dual Moving Average Strategy"
+my_indicator_description = f"SMA {sma_short_period}/{sma_long_period} crossover"
+
+df = df.copy()
+sma_short = df["close"].rolling(sma_short_period).mean()
+sma_long = df["close"].rolling(sma_long_period).mean()
+
+buy = (sma_short > sma_long) & (sma_short.shift(1) <= sma_long.shift(1))
+sell = (sma_short < sma_long) & (sma_short.shift(1) >= sma_long.shift(1))
+
+df["buy"] = buy.fillna(False).astype(bool)
+df["sell"] = sell.fillna(False).astype(bool)
+```
+
+See full examples:
+
+- [`docs/examples/dual_ma_with_params.py`](docs/examples/dual_ma_with_params.py)
+- [`docs/examples/multi_indicator_composite.py`](docs/examples/multi_indicator_composite.py)
+- [`docs/examples/cross_sectional_momentum_rsi.py`](docs/examples/cross_sectional_momentum_rsi.py)
 
 ## Supported Markets, Brokers, and Exchanges
 
