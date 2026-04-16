@@ -889,6 +889,66 @@ def get_positions():
         return jsonify({'code': 0, 'msg': str(e), 'data': {'positions': [], 'items': []}}), 500
 
 
+def _build_strategy_equity_curve(user_id: int, strategy_id: int):
+    st = get_strategy_service().get_strategy(strategy_id, user_id=user_id) or {}
+    if not st:
+        return None, 'Strategy not found'
+
+    initial = float(st.get('initial_capital') or (st.get('trading_config') or {}).get('initial_capital') or 0)
+    if initial <= 0:
+        initial = 1000.0
+
+    with get_db_connection() as db:
+        cur = db.cursor()
+        cur.execute(
+            """
+            SELECT created_at, profit
+            FROM qd_strategy_trades
+            WHERE strategy_id = ?
+            ORDER BY created_at ASC
+            """,
+            (strategy_id,)
+        )
+        rows = cur.fetchall() or []
+        cur.execute(
+            """
+            SELECT COALESCE(SUM(unrealized_pnl), 0) AS u
+            FROM qd_strategy_positions
+            WHERE strategy_id = ?
+            """,
+            (strategy_id,),
+        )
+        prow = cur.fetchone() or {}
+        cur.close()
+
+    equity = initial
+    curve = []
+    for r in rows:
+        try:
+            equity += float(r.get('profit') or 0)
+        except Exception:
+            pass
+        created_at = r.get('created_at')
+        if created_at and hasattr(created_at, 'timestamp'):
+            ts = int(created_at.timestamp())
+        elif created_at:
+            ts = int(created_at)
+        else:
+            ts = int(time.time())
+        curve.append({'time': ts, 'equity': round(equity, 2)})
+
+    try:
+        unreal = float(prow.get('u') or prow.get('U') or 0)
+    except Exception:
+        unreal = 0.0
+    live_equity = float(equity) + unreal
+    now_ts = int(time.time())
+    if abs(unreal) > 1e-12 or not curve:
+        curve.append({'time': now_ts, 'equity': round(live_equity, 2)})
+
+    return curve, None
+
+
 @strategy_bp.route('/strategies/equityCurve', methods=['GET'])
 @login_required
 def get_equity_curve():
@@ -899,61 +959,9 @@ def get_equity_curve():
         if not strategy_id:
             return jsonify({'code': 0, 'msg': 'Missing strategy id parameter', 'data': []}), 400
 
-        st = get_strategy_service().get_strategy(strategy_id, user_id=user_id) or {}
-        if not st:
-            return jsonify({'code': 0, 'msg': 'Strategy not found', 'data': []}), 404
-        initial = float(st.get('initial_capital') or (st.get('trading_config') or {}).get('initial_capital') or 0)
-        if initial <= 0:
-            initial = 1000.0
-
-        with get_db_connection() as db:
-            cur = db.cursor()
-            cur.execute(
-                """
-                SELECT created_at, profit
-                FROM qd_strategy_trades
-                WHERE strategy_id = ?
-                ORDER BY created_at ASC
-                """,
-                (strategy_id,)
-            )
-            rows = cur.fetchall() or []
-            cur.execute(
-                """
-                SELECT COALESCE(SUM(unrealized_pnl), 0) AS u
-                FROM qd_strategy_positions
-                WHERE strategy_id = ?
-                """,
-                (strategy_id,),
-            )
-            prow = cur.fetchone() or {}
-            cur.close()
-
-        equity = initial
-        curve = []
-        for r in rows:
-            try:
-                equity += float(r.get('profit') or 0)
-            except Exception:
-                pass
-            created_at = r.get('created_at')
-            if created_at and hasattr(created_at, 'timestamp'):
-                ts = int(created_at.timestamp())
-            elif created_at:
-                ts = int(created_at)
-            else:
-                ts = int(time.time())
-            curve.append({'time': ts, 'equity': round(equity, 2)})
-
-        # 将未实现盈亏并入曲线末端，便于「持仓中」也能在绩效里看到浮动权益
-        try:
-            unreal = float(prow.get('u') or prow.get('U') or 0)
-        except Exception:
-            unreal = 0.0
-        live_equity = float(equity) + unreal
-        now_ts = int(time.time())
-        if abs(unreal) > 1e-12 or not curve:
-            curve.append({'time': now_ts, 'equity': round(live_equity, 2)})
+        curve, error = _build_strategy_equity_curve(user_id, strategy_id)
+        if error:
+            return jsonify({'code': 0, 'msg': error, 'data': []}), 404
 
         return jsonify({'code': 1, 'msg': 'success', 'data': curve})
     except Exception as e:
@@ -1906,17 +1914,26 @@ Quality rules:
 def get_strategy_performance():
     """Get strategy performance metrics (aggregated from equity curve and trades)."""
     try:
-        strategy_id = request.args.get('id')
+        user_id = g.user_id
+        strategy_id = request.args.get('id', type=int)
         if not strategy_id:
             return jsonify({'code': 0, 'msg': 'Strategy ID required'})
 
-        svc = get_strategy_service()
-        equity_data = svc.get_equity_curve(int(strategy_id))
+        equity_data, error = _build_strategy_equity_curve(user_id, strategy_id)
+        if error:
+            return jsonify({'code': 0, 'msg': error, 'data': None}), 404
+
+        latest_equity = float(equity_data[-1].get('equity') or 0) if equity_data else 0.0
+        first_equity = float(equity_data[0].get('equity') or 0) if equity_data else latest_equity
+        total_return = latest_equity - first_equity
         return jsonify({
             'code': 1,
             'msg': 'success',
             'data': {
-                'equity_curve': equity_data
+                'equity_curve': equity_data,
+                'latest_equity': round(latest_equity, 2),
+                'total_return': round(total_return, 2),
+                'points': len(equity_data),
             }
         })
     except Exception as e:
