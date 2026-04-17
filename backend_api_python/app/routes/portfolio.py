@@ -4,6 +4,7 @@ Manages manual positions (user's existing holdings) and AI monitoring tasks.
 """
 from flask import Blueprint, request, jsonify, g
 from datetime import date, datetime, timezone
+import os
 import json
 import traceback
 import time
@@ -24,9 +25,18 @@ portfolio_bp = Blueprint('portfolio', __name__)
 kline_service = KlineService()
 cache = CacheManager()
 
-# Thread pool for parallel price fetching
-# Lower concurrency to avoid triggering API limits (especially for forex/US stocks)
-executor = ThreadPoolExecutor(max_workers=3)
+# Thread pool for parallel price fetching.
+# Lower concurrency to avoid triggering API limits (especially for forex/US
+# stocks) and to keep pressure off the DB connection pool.
+# Tunable via PORTFOLIO_EXECUTOR_WORKERS env.
+def _portfolio_executor_workers() -> int:
+    try:
+        v = int(os.getenv("PORTFOLIO_EXECUTOR_WORKERS", "3"))
+        return v if v > 0 else 3
+    except Exception:
+        return 3
+
+executor = ThreadPoolExecutor(max_workers=_portfolio_executor_workers())
 
 # Request interval (seconds) to avoid too frequent requests
 REQUEST_INTERVAL = 0.3

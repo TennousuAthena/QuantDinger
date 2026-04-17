@@ -33,6 +33,15 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-quantdinger}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quantdinger123}
       TZ: ${TZ:-Asia/Shanghai}
+    # Raise PostgreSQL's max_connections so the backend pool (default
+    # DB_POOL_MAX=50) plus psql/admin connections never exceed PG's own
+    # limit.  PG default is 100; 150 gives headroom for future scaling.
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=${PG_MAX_CONNECTIONS:-150}"
+      - "-c"
+      - "shared_buffers=${PG_SHARED_BUFFERS:-256MB}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend_api_python/migrations/init.sql:/docker-entrypoint-initdb.d/01-init.sql
@@ -96,6 +105,19 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - CACHE_ENABLED=true
+      # Database connection pool tuning (see app/utils/db_postgres.py).
+      # Defaults are safe for ~50 concurrent DB users; raise if you run many
+      # bots or see `connection pool exhausted` errors.
+      - DB_POOL_MIN=${DB_POOL_MIN:-5}
+      - DB_POOL_MAX=${DB_POOL_MAX:-50}
+      - DB_POOL_ACQUIRE_TIMEOUT=${DB_POOL_ACQUIRE_TIMEOUT:-10}
+      - DB_POOL_HEALTH_CHECK=${DB_POOL_HEALTH_CHECK:-true}
+      # Route-level executor tuning (each worker may use one DB connection).
+      - MARKET_EXECUTOR_WORKERS=${MARKET_EXECUTOR_WORKERS:-6}
+      - PORTFOLIO_EXECUTOR_WORKERS=${PORTFOLIO_EXECUTOR_WORKERS:-3}
+      # Gunicorn concurrency (threads within the single worker process).
+      - GUNICORN_WORKERS=${GUNICORN_WORKERS:-1}
+      - GUNICORN_THREADS=${GUNICORN_THREADS:-8}
     networks:
       - quantdinger-network
     healthcheck:

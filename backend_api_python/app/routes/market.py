@@ -3,6 +3,7 @@ Market API routes (local-only).
 Provides watchlist, market metadata, symbol search, and pricing helpers for the frontend.
 """
 from flask import Blueprint, request, jsonify, g
+import os
 import traceback
 import json
 import time
@@ -27,8 +28,17 @@ market_bp = Blueprint('market', __name__)
 kline_service = KlineService()
 cache = CacheManager()
 
-# Thread pool for parallel price fetching
-executor = ThreadPoolExecutor(max_workers=10)
+# Thread pool for parallel price fetching.
+# Each task may grab a DB connection, so keep this well below DB_POOL_MAX.
+# Tunable via MARKET_EXECUTOR_WORKERS env.
+def _market_executor_workers() -> int:
+    try:
+        v = int(os.getenv("MARKET_EXECUTOR_WORKERS", "6"))
+        return v if v > 0 else 6
+    except Exception:
+        return 6
+
+executor = ThreadPoolExecutor(max_workers=_market_executor_workers())
 
 def _now_ts() -> int:
     return int(time.time())

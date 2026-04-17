@@ -4,7 +4,7 @@ This document records version updates, new features, bug fixes, and database mig
 
 ---
 
-## V3.0.4 (2026-04-11) — 多语言文件全量补齐(AI 自动翻译)
+## V3.0.2 (2026-04-11) — 多语言文件全量补齐(AI 自动翻译)
 
 ### 🌍 i18n
 
@@ -52,7 +52,7 @@ This document records version updates, new features, bug fixes, and database mig
 
 ---
 
-## V3.0.3 (2026-04-11) — 交易机器人全链路修复(Grid / Martingale / Trend / DCA)
+## V3.0.2 (2026-04-11) — 交易机器人全链路修复(Grid / Martingale / Trend / DCA)
 
 ### 🐛 Bug Fixes — 交易机器人
 
