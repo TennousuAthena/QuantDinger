@@ -305,7 +305,7 @@ class UserService:
                 cur.close()
                 
                 new_version = int(row.get('token_version') or 1) if row else 1
-                logger.info(f"Incremented token_version for user_id={user_id} to {new_version}")
+                logger.info("Incremented token_version for user")
                 return new_version
         except Exception as e:
             logger.error(f"increment_token_version failed: {e}")
