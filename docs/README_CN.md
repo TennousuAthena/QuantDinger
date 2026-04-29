@@ -5,8 +5,8 @@
 
   <h1>QuantDinger</h1>
   <h3>你的私有化 AI 量化操作系统</h3>
-  <p><strong>把市场研究、Python 策略生成、回测验证和实盘执行，全部放进一套由你自己掌控的基础设施。</strong></p>
-  <p><em>可自托管、AI 原生、面向研究员、交易员、量化开发者和运营团队的完整工作台。</em></p>
+  <p><strong>图表研究、AI 市场分析、Python 指标与策略、回测与实盘执行，一套可部署栈全搞定——跑在你自己的机器上，用你自己的 API 密钥。</strong></p>
+  <p><em>可自托管量化平台：从想法与 AI 辅助写码，到回测与接交易所的实盘；可选多用户、积分与计费能力，方便团队运营落地。</em></p>
 
   <p>
     <a href="../README.md"><strong>English</strong></a> &nbsp;·&nbsp;
@@ -31,34 +31,59 @@
 
 ---
 
-> QuantDinger 是一个**可自托管、以本地优先为设计原则的量化交易与算法交易平台**，把 **AI 研究、Python 策略生成、回测验证和实盘执行** 放进同一套系统里。
+> QuantDinger 是**可自托管、本地优先**的量化平台：把 **AI 辅助研究**、**Python 原生策略**、**回测** 与 **实盘**（加密货币、IBKR 美股、MT5 外汇）放在**同一套产品**里，而不是图表、脚本、机器人和面板各自为政。
 
 ## 两分钟试用
 
-**最快的本地体验方式：**
+**前置条件：** 已安装带 Compose 的 [Docker](https://docs.docker.com/get-docker/)（Windows/macOS 用 Docker Desktop，Linux 用 Docker Engine + Compose 插件）以及 **Git**。**不需要安装 Node.js**（仓库已含 `frontend/dist` 预构建前端）。
+
+### macOS / Linux（Bash）
+
+一行命令（也可拆成多步执行）：
 
 ```bash
-git clone https://github.com/brokermr810/QuantDinger.git && cd QuantDinger && cp backend_api_python/env.example backend_api_python/.env && ./scripts/generate-secret-key.sh && docker-compose up -d --build
+git clone https://github.com/brokermr810/QuantDinger.git && cd QuantDinger && cp backend_api_python/env.example backend_api_python/.env && chmod +x scripts/generate-secret-key.sh && ./scripts/generate-secret-key.sh && docker-compose up -d --build
 ```
 
-启动后：
+若提示脚本不可执行，先执行 `chmod +x scripts/generate-secret-key.sh` 再重试。若系统没有 `docker-compose` 命令，可尝试 `docker compose`（Compose V2）。
 
-- 打开 `http://localhost:8888`
-- 默认登录：`quantdinger` / `123456`
-- 正式环境部署前请先检查 `backend_api_python/.env`
+### Windows（PowerShell）
+
+请在 **PowerShell**（不要用 CMD）中操作，并先启动 **Docker Desktop**（建议开启 WSL2 后端）。
+
+```powershell
+git clone https://github.com/brokermr810/QuantDinger.git
+Set-Location QuantDinger
+Copy-Item backend_api_python\env.example -Destination backend_api_python\.env
+$key = & python -c "import secrets; print(secrets.token_hex(32))" 2>$null
+if (-not $key) { $key = & py -c "import secrets; print(secrets.token_hex(32))" 2>$null }
+if (-not $key) { $key = & python3 -c "import secrets; print(secrets.token_hex(32))" 2>$null }
+if (-not $key) { Write-Error "请安装 Python 3（安装时勾选 Add to PATH），或安装 Git for Windows 后使用下方 Git Bash + macOS/Linux 命令。" }
+(Get-Content backend_api_python\.env) -replace '^SECRET_KEY=.*$', "SECRET_KEY=$key" | Set-Content backend_api_python\.env -Encoding utf8
+docker-compose up -d --build
+```
+
+若提示找不到 `docker-compose`，请改用 **`docker compose`**（中间为空格）。若未安装 Git，请安装 [Git for Windows](https://git-scm.com/download/win)。
+
+### Windows 备选：Git Bash
+
+若已安装 **Git for Windows**，打开 **Git Bash**，可直接复制上方 **macOS / Linux** 的 Bash 一行命令（含 `./scripts/generate-secret-key.sh`），无需手写 PowerShell。
+
+---
+
+启动后打开 **`http://localhost:8888`**，使用 **`quantdinger` / `123456`** 登录，并在任何真实业务前**修改默认管理员密码**。环境要求、逐项配置、首次自检与排错，请继续阅读下文 **[安装与首次运行](#安装与首次运行)**。
 
 ## QuantDinger 是什么？
 
-QuantDinger 是一个**可自托管的 AI 交易平台**，也是一套**量化研究与策略运行工作台**，适合希望用一套系统完成以下工作的人：
+适合希望用**一套可控环境**替代「图表 + Jupyter + 机器人 + 通知」拼装的团队与个人：
 
-- AI 市场分析
-- Python 指标与策略开发
-- 回测与策略持久化
-- 实盘交易执行
-- 组合监控与通知
-- 多用户运营、计费与商业化
+- **研究**：AI 市场分析、自选与多市场上下文（加密、权益、外汇；可选预测类研究工作流）。
+- **构建**：`IndicatorStrategy`（表格式信号）与 `ScriptStrategy`（事件驱动）；可用自然语言生成代码草稿后再用 Python 精修。
+- **验证**：服务端回测、指标与资金曲线，与你在界面里迭代的策略模型一致。
+- **运营**：实盘策略、快速交易、通知与各交易所适配层；凭证落在 **你的** PostgreSQL 与 `.env` 中。
+- **扩展（可选）**：多用户、积分、会员、USDT 计费等运营向能力。
 
-如果你正在寻找的是**开源量化平台**、**AI 交易研究系统**、**可自托管回测系统**，或者**自然语言生成 Python 策略工作流**，QuantDinger 就是按这个方向设计的。
+若你在找的是**开源量化底座**、**可自托管的 AI 交易工作台**，或 **自然语言 → Python 策略** 且带产品化界面与运维面，本仓库即是集成入口。
 
 ## 为什么选择 QuantDinger？AI 驱动的量化交易与回测平台
 
@@ -320,43 +345,91 @@ flowchart LR
     API --> NOTIFY
 ```
 
-## 快速开始
+## 安装与首次运行
 
-> 只需安装 [Docker](https://docs.docker.com/get-docker/)。由于仓库已内置 `frontend/dist`，部署时不需要再安装 Node.js 来构建前端。
+下文对应常见「本地部署」顺序：**准备宿主机 → 拉代码 → 配密钥 → 起栈 → 自检 → 加固 → 可选接入大模型**。**不需要 Node.js**：前端已预构建在 `frontend/dist`，由 `frontend` 容器内 Nginx 提供。
 
-### Linux / macOS
+### 环境准备
+
+| 项目 | 说明 |
+|------|------|
+| [Docker](https://docs.docker.com/get-docker/) + Compose v2 | 用于 Postgres、Redis、API 与静态站点。 |
+| `git` | 克隆本仓库。 |
+| 默认端口 | `8888`（Web）、`5000`（API，默认绑定 **127.0.0.1**）、`5432` / `6379`（数据库与 Redis，默认回环）。若冲突可在**仓库根目录** `.env` 中按 `docker-compose.yml` 调整。 |
+| 磁盘 | 数据库卷会随用户、策略与日志增长，正式使用建议预留数 GB 以上。 |
+
+### 1）克隆仓库
 
 ```bash
 git clone https://github.com/brokermr810/QuantDinger.git
 cd QuantDinger
+```
+
+### 2）创建后端配置（必做）
+
+```bash
 cp backend_api_python/env.example backend_api_python/.env
+```
+
+绝大多数运行时行为由 **`backend_api_python/.env`** 控制（数据库、管理员、LLM、工作进程、计费等）。**仓库根目录**下的 `.env` 仅用于 Compose 级变量（如 **端口**、**镜像前缀** `IMAGE_PREFIX`），与业务配置是两层概念。
+
+### 3）首次启动前必须设置 `SECRET_KEY`
+
+若 `SECRET_KEY` 仍为 `env.example` 中的占位值，**后端会拒绝启动**，以避免误部署到公网却不设密钥。
+
+**Linux / macOS（推荐）：**
+
+```bash
 ./scripts/generate-secret-key.sh
+```
+
+脚本会用 Python `secrets` 覆盖 `backend_api_python/.env` 中的 `SECRET_KEY=` 行。
+
+**任意系统**：自行生成足够长的随机串（例如 64 位十六进制），写入 `backend_api_python/.env` 的 `SECRET_KEY=`。
+
+### 4）启动
+
+```bash
 docker-compose up -d --build
 ```
 
-### Windows PowerShell
+默认服务：**`postgres`**、**`redis`**、**`backend`**、**`frontend`**（详见仓库根目录 `docker-compose.yml` 与健康检查）。
 
-```powershell
-git clone https://github.com/brokermr810/QuantDinger.git
-cd QuantDinger
-Copy-Item backend_api_python\env.example -Destination backend_api_python\.env
-$key = py -c "import secrets; print(secrets.token_hex(32))"
-(Get-Content backend_api_python\.env) -replace '^SECRET_KEY=.*$', "SECRET_KEY=$key" | Set-Content backend_api_python\.env -Encoding UTF8
-docker-compose up -d --build
-```
+### 5）验证与登录
 
-启动后：
+| 检查项 | 地址 / 命令 |
+|--------|-------------|
+| Web | `http://localhost:8888`（可用根目录 `.env` 中 `FRONTEND_HOST` / `FRONTEND_PORT` 覆盖） |
+| API 健康 | `http://localhost:5000/api/health` |
+| 日志 | `docker-compose logs -f backend` |
 
-- 前端地址：`http://localhost:8888`
-- 后端健康检查：`http://localhost:5000/api/health`
-- 默认登录：`quantdinger` / `123456`
+默认管理员（生产环境请立即修改）：
 
-部署注意事项：
+- 用户名：`quantdinger`
+- 密码：`123456`（来自 `env.example`；也可在首次登录前于 `.env` 中设置 `ADMIN_USER` / `ADMIN_PASSWORD`）
 
-- 如果 `SECRET_KEY` 仍然使用默认值，后端容器不会启动。
-- 主要配置文件位于 `../backend_api_python/.env`。
-- 根目录 `.env` 是可选项，主要用于镜像源和端口覆盖。
-- 默认栈包含 `frontend`、`backend`、`postgres`、`redis`。
+请在 `backend_api_python/.env` 中把 **`FRONTEND_URL`** 设为用户实际访问的完整地址（含 `https://` 反代场景），以免影响跳转、部分跨域相关逻辑与生成链接。
+
+### 6）可选：打开 AI 能力
+
+AI 分析、自然语言生成代码等需至少配置一个 LLM 供应商。打开 `backend_api_python/env.example` 中的 **AI / LLM** 小节，将对应变量复制到你的 `.env`（例如 `LLM_PROVIDER` + `OPENROUTER_API_KEY`）。修改后需**重启 backend 容器**。
+
+### 7）Windows 补充说明
+
+请使用 **Docker Desktop**，并在仓库根目录用 **PowerShell** 执行与上文「两分钟试用」中 Windows 相同的步骤。若 `py` 不在 PATH，请改用 `python` 或 `python3` 生成密钥；保存 `.env` 时建议使用 UTF-8，避免编辑器破坏换行。
+
+### 首次使用建议路径（产品功能）
+
+栈健康后建议顺序：（1）做一次 **AI 资产/市场分析**，确认 LLM 与数据链路；（2）打开 **指标 IDE**，选合约/现货，做小区间 **信号回测**；（3）需要时用 **AI 写指标/策略** 再手改 Python；（4）再在个人中心绑定 **交易所 API**，先 **测试连接**，最后按需使用 **实盘策略** 或 **快速交易** 并选对执行模式。这样能在上真实资金前尽早暴露配置问题。
+
+### 常见问题（首次启动）
+
+| 现象 | 排查 |
+|------|------|
+| backend 立刻退出 | `SECRET_KEY` 仍为默认值，或 `.env` 语法错误；查看 `docker-compose logs backend`。 |
+| 浏览器打不开或 API 报错 | `FRONTEND_URL` / 访问域名不一致；本机防火墙或未映射端口。 |
+| 端口被占用 | 本机已有其他 Postgres/Redis/5000/8888 服务；调整根目录 `.env` 中对应变量。 |
+| 大量实盘策略提示无法启动 | 提高 `backend_api_python/.env` 中 `STRATEGY_MAX_THREADS` 并重启 API（见 `env.example` 注释）。 |
 
 ### 常用 Docker 命令
 
@@ -368,15 +441,17 @@ docker-compose up -d --build
 docker-compose down
 ```
 
-### 可选根目录 `.env`
+### 可选：仓库根目录 `.env`（仅 Compose）
 
-如果你需要自定义端口或镜像源，可以在根目录创建 `.env`：
+用于**自定义端口**或**拉取基础镜像过慢**时设置镜像前缀，在**与 `docker-compose.yml` 同级**的目录创建 `.env`：
 
 ```ini
 FRONTEND_PORT=3000
 BACKEND_PORT=127.0.0.1:5001
 IMAGE_PREFIX=docker.m.daocloud.io/library/
 ```
+
+域名、HTTPS 与反向代理等生产向部署见 **[云服务器部署文档](CLOUD_DEPLOYMENT_CN.md)**。
 
 ## 最小示例：Python 指标策略
 
@@ -603,7 +678,7 @@ QuantDinger/
 ## 从这里开始
 
 - **想先看产品效果？** 先打开[在线演示](https://ai.quantdinger.com)或观看[视频演示](https://www.youtube.com/watch?v=tNAZ9uMiUUw)。
-- **想尽快自己部署？** 直接看[快速开始](#快速开始)，用 Docker Compose 拉起来。
+- **想尽快自己部署？** 先看 [两分钟试用](#两分钟试用) 里的一条命令，再按 [安装与首次运行](#安装与首次运行) 逐项检查。
 - **想开始写策略？** 先看[策略开发指南](STRATEGY_DEV_GUIDE_CN.md)。示例代码位于 [`examples/`](examples/)，并已与开发指南保持同步。
 - **想上云或生产部署？** 看[云服务器部署文档](CLOUD_DEPLOYMENT_CN.md)。
 - **想做商业授权或定制化？** 直接通过 [quantdinger.com](https://quantdinger.com) 联系项目方。

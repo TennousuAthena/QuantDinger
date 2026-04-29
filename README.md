@@ -5,8 +5,8 @@
 
   <h1>QuantDinger</h1>
   <h3>Your Private AI Quant Operating System</h3>
-  <p><strong>Research markets, generate Python strategies, backtest ideas, and run live trading workflows on infrastructure you control.</strong></p>
-  <p><em>Self-hosted AI trading platform for quant research, backtesting, execution, and operator-ready growth.</em></p>
+  <p><strong>One deployable stack for charting, AI market research, Python indicators &amp; strategies, backtests, and live execution—on your own servers and your own keys.</strong></p>
+  <p><em>Self-hosted quantitative platform: from idea and AI-assisted coding to paper-style workflows and exchange-connected live trading, with optional multi-user and billing primitives for operators.</em></p>
 
   <p>
     <a href="README.md"><strong>English</strong></a> &nbsp;·&nbsp;
@@ -31,34 +31,59 @@
 
 ---
 
-> QuantDinger is a **self-hosted, local-first quantitative trading and algorithmic trading platform** for **AI research, Python strategy generation, backtesting, and live execution**.
+> QuantDinger is a **self-hosted, local-first** quantitative platform: **AI-assisted research**, **Python-native strategies**, **backtesting**, and **live trading** (crypto, IBKR stocks, MT5 forex) in one product—not a loose collection of scripts and SaaS tabs.
 
-## Try in 2 Minutes
+## Try in 2 minutes
 
-**Fastest way to try QuantDinger locally:**
+**Prerequisites:** [Docker](https://docs.docker.com/get-docker/) with Compose (Docker Desktop on Windows/macOS, or Docker Engine + Compose plugin on Linux), and **Git**. Node.js is **not** required (prebuilt UI is in `frontend/dist`).
+
+### macOS / Linux (Bash)
+
+One line (or run the same steps separately):
 
 ```bash
-git clone https://github.com/brokermr810/QuantDinger.git && cd QuantDinger && cp backend_api_python/env.example backend_api_python/.env && ./scripts/generate-secret-key.sh && docker-compose up -d --build
+git clone https://github.com/brokermr810/QuantDinger.git && cd QuantDinger && cp backend_api_python/env.example backend_api_python/.env && chmod +x scripts/generate-secret-key.sh && ./scripts/generate-secret-key.sh && docker-compose up -d --build
 ```
 
-Then open:
+If `./scripts/generate-secret-key.sh` fails with “Permission denied”, run `chmod +x scripts/generate-secret-key.sh` and retry. If `docker-compose` is not found, try `docker compose` (Compose V2).
 
-- `http://localhost:8888`
-- login with `quantdinger` / `123456`
-- read `backend_api_python/.env` before production use
+### Windows (PowerShell)
 
-## What Is QuantDinger?
+Use **PowerShell** (not CMD) in a folder where you want the project. **Docker Desktop** must be running (WSL2 backend recommended).
 
-QuantDinger is a **self-hosted AI trading platform** and **quant research workspace** for teams and operators who want one system for:
+```powershell
+git clone https://github.com/brokermr810/QuantDinger.git
+Set-Location QuantDinger
+Copy-Item backend_api_python\env.example -Destination backend_api_python\.env
+$key = & python -c "import secrets; print(secrets.token_hex(32))" 2>$null
+if (-not $key) { $key = & py -c "import secrets; print(secrets.token_hex(32))" 2>$null }
+if (-not $key) { $key = & python3 -c "import secrets; print(secrets.token_hex(32))" 2>$null }
+if (-not $key) { Write-Error "Install Python 3 from python.org (tick 'Add to PATH') or use Git Bash with the macOS/Linux block above." }
+(Get-Content backend_api_python\.env) -replace '^SECRET_KEY=.*$', "SECRET_KEY=$key" | Set-Content backend_api_python\.env -Encoding utf8
+docker-compose up -d --build
+```
 
-- AI market analysis
-- Python indicator and strategy development
-- backtesting and strategy persistence
-- live trading execution
-- portfolio monitoring and alerts
-- multi-user operations, billing, and commercialization
+If `docker-compose` is not recognized, use **`docker compose`** (space, no hyphen). If Git is missing, install [Git for Windows](https://git-scm.com/download/win).
 
-If you are searching for an **open source quant platform**, **AI trading research stack**, **self-hosted backtesting system**, or **natural-language-to-Python strategy workflow**, this is what QuantDinger is built for.
+### Windows alternative: Git Bash
+
+If you installed **Git for Windows**, open **Git Bash** and you can use the **macOS / Linux** one-liner above (Bash + `chmod` + `./scripts/generate-secret-key.sh`).
+
+---
+
+Then open **`http://localhost:8888`**, sign in with **`quantdinger` / `123456`**, and **change the default admin password** before any real use. For prerequisites, configuration details, first-run checks, and troubleshooting, continue to **[Installation & first-time setup](#installation--first-time-setup-docker-compose)** below.
+
+## What is QuantDinger?
+
+QuantDinger is built for people who want **one controlled environment** instead of stitching together chart apps, Jupyter, bots, and dashboards:
+
+- **Research**: AI-driven analysis, watchlists, and multi-market context (crypto, equities, forex, optional prediction-market workflows).
+- **Build**: Indicator-style (`IndicatorStrategy`) and script-style (`ScriptStrategy`) Python; optional natural-language → code to bootstrap.
+- **Validate**: Server-side backtests, metrics, and equity curves tied to the same strategy model you iterate in the UI.
+- **Operate**: Live strategies, quick trade, notifications, and execution adapters—credentials stay in **your** Postgres-backed vault and `.env`.
+- **Grow (optional)**: Multi-user patterns, credits, memberships, and USDT billing hooks for teams that ship a product, not only a personal bot.
+
+If you are looking for an **open-source quant stack**, **self-hosted AI trading workspace**, or **NL → Python strategy workflow** with a real operator surface, this repository is the integration point.
 
 ## Why QuantDinger? AI-Powered Quantitative Trading and Backtesting
 
@@ -320,21 +345,78 @@ flowchart LR
     API --> NOTIFY
 ```
 
-## Quick Start
+## Installation & first-time setup (Docker Compose)
 
-> Requirement: install [Docker](https://docs.docker.com/get-docker/). Node.js is not required for deployment because this repository already includes the prebuilt frontend in `frontend/dist`.
+This section mirrors a typical “local deploy” path: **prepare the host → obtain the code → configure secrets → start the stack → verify → harden → optionally wire AI**. Node.js is **not** required: the repo ships a **prebuilt** UI under `frontend/dist` and Nginx serves it inside the `frontend` container.
 
-### Linux / macOS
+### Prerequisites
+
+| Item | Notes |
+|------|--------|
+| [Docker](https://docs.docker.com/get-docker/) + Docker Compose v2 | Used for Postgres, Redis, API, and static UI. |
+| `git` | To clone this repository. |
+| Ports (defaults) | `8888` (web), `5000` (API, bound to **127.0.0.1**), `5432` / `6379` (DB/Redis, loopback by default). Change via root `.env` if they collide. |
+| Disk | Postgres volume grows with users, strategies, and logs; plan a few GB minimum for serious use. |
+
+### 1) Clone the repository
 
 ```bash
 git clone https://github.com/brokermr810/QuantDinger.git
 cd QuantDinger
+```
+
+### 2) Create backend configuration (mandatory)
+
+```bash
 cp backend_api_python/env.example backend_api_python/.env
+```
+
+Almost all runtime behavior is driven by **`backend_api_python/.env`** (database URL, admin user, LLM keys, workers, billing toggles, etc.). The optional **repository root** `.env` only adjusts Compose-level concerns such as **ports** and **image mirrors** (`IMAGE_PREFIX`).
+
+### 3) Set `SECRET_KEY` before the first boot (mandatory)
+
+The API **refuses to start** if `SECRET_KEY` is still the placeholder from `env.example`. This blocks accidental insecure deployments.
+
+**Linux / macOS** (recommended):
+
+```bash
 ./scripts/generate-secret-key.sh
+```
+
+The script overwrites the `SECRET_KEY=` line in `backend_api_python/.env` using Python’s `secrets` module.
+
+**Manual** (any OS): generate a long random string (for example 64 hex chars) and set `SECRET_KEY=...` in `backend_api_python/.env`.
+
+### 4) Start the stack
+
+```bash
 docker-compose up -d --build
 ```
 
-### Windows PowerShell
+Services: **`postgres`**, **`redis`**, **`backend`**, **`frontend`** (see `docker-compose.yml` for healthchecks and port mappings).
+
+### 5) Verify and sign in
+
+| Check | URL / command |
+|--------|----------------|
+| Web UI | `http://localhost:8888` (override host/port with `FRONTEND_HOST` / `FRONTEND_PORT` in root `.env` if needed). |
+| API health | `http://localhost:5000/api/health` |
+| Logs | `docker-compose logs -f backend` |
+
+Default admin (change immediately in production):
+
+- **User**: `quantdinger`
+- **Password**: `123456` (from `env.example`; override with `ADMIN_USER` / `ADMIN_PASSWORD` in `.env` before first use if you prefer).
+
+Also set **`FRONTEND_URL`** in `backend_api_python/.env` to the URL users actually use (including `https://` behind a reverse proxy); it affects redirects, CORS-related settings, and some generated links.
+
+### 6) Optional: enable AI features
+
+AI analysis, NL→code, and related flows need at least one LLM provider configured. Open `backend_api_python/env.example`, find the **AI / LLM** block, copy the relevant keys into your `.env` (for example `LLM_PROVIDER` + `OPENROUTER_API_KEY`, or another supported provider). Restart the backend after edits.
+
+### 7) Windows notes
+
+Use **Docker Desktop** (WSL2 backend recommended). From PowerShell in the repo root:
 
 ```powershell
 git clone https://github.com/brokermr810/QuantDinger.git
@@ -345,20 +427,18 @@ $key = py -c "import secrets; print(secrets.token_hex(32))"
 docker-compose up -d --build
 ```
 
-After startup:
+If `py` is not on PATH, use `python` or `python3` in the one-liner that generates `$key`. Line endings should remain UTF-8; avoid editors that strip newlines from `.env`.
 
-- Frontend: `http://localhost:8888`
-- Backend health check: `http://localhost:5000/api/health`
-- Default login: `quantdinger` / `123456`
+### Troubleshooting (first boot)
 
-Important deployment notes:
+| Symptom | What to check |
+|---------|----------------|
+| Backend exits immediately | `SECRET_KEY` still default, or invalid `.env` syntax. Read `docker-compose logs backend`. |
+| Blank page or API errors from browser | `FRONTEND_URL` / origins mismatch; API not reachable from the host you opened. |
+| Port already in use | Another Postgres, Redis, or local service on `5432` / `6379` / `5000` / `8888`. Adjust variables in root `.env` per `docker-compose.yml`. |
+| Many live strategies, “start denied” | Raise `STRATEGY_MAX_THREADS` in `backend_api_python/.env` and restart API (see comments in `env.example`). |
 
-- The backend container will **not start** if `SECRET_KEY` still uses the default value.
-- The main application config lives in `backend_api_python/.env`.
-- Root `.env` is optional and is mainly used for image mirrors or custom ports.
-- The default stack includes `frontend`, `backend`, `postgres`, and `redis`.
-
-### Common Docker Commands
+### Common Docker commands
 
 ```bash
 docker-compose ps
@@ -368,15 +448,21 @@ docker-compose up -d --build
 docker-compose down
 ```
 
-### Optional Root `.env`
+### Optional root `.env` (Compose only)
 
-If you need custom ports or image mirrors, create a root `.env`:
+For **custom ports** or **mirror/prefix** for base images (slow Docker Hub pulls), create a file named `.env` in the **repository root** (same directory as `docker-compose.yml`):
 
 ```ini
 FRONTEND_PORT=3000
 BACKEND_PORT=127.0.0.1:5001
 IMAGE_PREFIX=docker.m.daocloud.io/library/
 ```
+
+Production-style TLS, domain, and reverse-proxy placement are covered in **[Cloud deployment](docs/CLOUD_DEPLOYMENT_EN.md)**.
+
+### Suggested first session (product walkthrough)
+
+After the stack is healthy: (1) run an **AI asset / market analysis** so LLM and data paths are verified; (2) open the **Indicator IDE**, load a symbol, and run a **signal backtest** on a small date range; (3) optionally use **AI code generation** to draft an indicator, then edit the Python; (4) when ready, attach **exchange API keys** (profile / credentials), use **test connection**, then explore **live strategy** or **quick trade** with execution mode you intend. This order surfaces configuration issues early before real capital.
 
 ## Minimal Example: Python Indicator Strategy
 
@@ -605,7 +691,7 @@ For commercial licensing, frontend source access, branding authorization, or dep
 ## Start Here
 
 - **Want to see the product first?** Open the [Live Demo](https://ai.quantdinger.com) or watch the [Video Demo](https://www.youtube.com/watch?v=tNAZ9uMiUUw).
-- **Want to self-host quickly?** Go straight to [Quick Start](#quick-start) and launch with Docker Compose.
+- **Want to self-host quickly?** Use [Try in 2 minutes](#try-in-2-minutes) for a one-liner, then follow [Installation & first-time setup](#installation--first-time-setup-docker-compose) for the full checklist.
 - **Want to build strategies?** Read the [Strategy Development Guide](docs/STRATEGY_DEV_GUIDE.md). Example scripts live in [`docs/examples/`](docs/examples/) and are kept aligned with the guide.
 - **Want cloud or production deployment?** Use the [Cloud Deployment Guide](docs/CLOUD_DEPLOYMENT_EN.md).
 - **Want to license or customize it for a business?** Contact the team through [quantdinger.com](https://quantdinger.com).
