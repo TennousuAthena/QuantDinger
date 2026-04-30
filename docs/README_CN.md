@@ -8,68 +8,46 @@
   <p><strong>图表研究、AI 市场分析、Python 指标与策略、回测与实盘执行，一套可部署栈全搞定——跑在你自己的机器上，用你自己的 API 密钥。</strong></p>
   <p><em>可自托管量化平台：从想法与 AI 辅助写码，到回测与接交易所的实盘；可选多用户、积分与计费能力，方便团队运营落地。</em></p>
 
-  <table align="center" style="border: 0; margin-top: 1.15rem; margin-bottom: 0; border-collapse: collapse;">
-    <tbody>
-      <tr>
-        <td align="center" style="padding: 0 12px 10px; line-height: 1.7;">
-          <a href="../README.md"><strong>English</strong></a>
-          <span style="color: #d0d7de;"> &nbsp;·&nbsp; </span>
-          <a href="README_CN.md"><strong>简体中文</strong></a>
-        </td>
-      </tr>
-      <tr>
-        <td align="center" style="padding: 12px 16px 14px; border-top: 1px solid #d8dee4; line-height: 2;">
-          <a href="https://ai.quantdinger.com"><strong>SaaS</strong></a><small style="color: #656d76; font-weight: normal;"> — 官方云上版</small>
-          <span style="color: #d0d7de;"> &nbsp;·&nbsp; </span>
-          <a href="https://www.youtube.com/watch?v=tNAZ9uMiUUw"><strong>视频演示</strong></a>
-          <span style="color: #d0d7de;"> &nbsp;·&nbsp; </span>
-          <a href="https://www.quantdinger.com"><strong>官网</strong></a>
-          <span style="color: #d0d7de;"> &nbsp;·&nbsp; </span>
-          <a href="https://aws.amazon.com/marketplace/pp/prodview-naanrb7d2mbc6"><strong>AWS Marketplace</strong></a><small style="color: #656d76; font-weight: normal;"> — AMI</small>
-        </td>
-      </tr>
-      <tr>
-        <td align="center" style="padding: 16px 12px 6px; border-top: 1px solid #d8dee4;">
-          <div style="color: #656d76; font-size: 12px; letter-spacing: 0.12em; font-weight: 600; margin-bottom: 12px;">社区与联系</div>
-          <table align="center" role="presentation" style="border: 0; border-collapse: collapse; margin: 0 auto;">
-            <tr>
-              <td align="center" style="padding: 0 20px; vertical-align: top;">
-                <a href="https://t.me/quantdinger" title="Telegram">
-                  <img src="https://cdn.simpleicons.org/telegram/26A5E4" width="28" height="28" alt="" aria-hidden="true" /><br />
-                  <strong>Telegram</strong>
-                </a>
-              </td>
-              <td align="center" style="padding: 0 20px; vertical-align: top;">
-                <a href="https://discord.com/invite/tyx5B6TChr" title="Discord">
-                  <img src="https://cdn.simpleicons.org/discord/5865F2" width="28" height="28" alt="" aria-hidden="true" /><br />
-                  <strong>Discord</strong>
-                </a>
-              </td>
-              <td align="center" style="padding: 0 20px; vertical-align: top;">
-                <a href="https://youtube.com/@quantdinger" title="YouTube">
-                  <img src="https://cdn.simpleicons.org/youtube/FF0000" width="28" height="28" alt="" aria-hidden="true" /><br />
-                  <strong>YouTube</strong>
-                </a>
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </tbody>
-  </table>
+  <div align="center" style="max-width: 680px; margin: 1.25rem auto 0; padding: 20px 22px 22px; border: 1px solid #d1d9e0; border-radius: 16px;">
+    <p style="margin: 0 0 14px; line-height: 1.65;">
+      <a href="../README.md"><strong>English</strong></a>
+      <span style="color: #afb8c1;"> · </span>
+      <a href="README_CN.md"><strong>简体中文</strong></a>
+    </p>
+    <p style="margin: 0 0 18px; padding-bottom: 16px; border-bottom: 1px solid #eaeef2; line-height: 2;">
+      <a href="https://ai.quantdinger.com"><strong>SaaS</strong></a><span style="color: #656d76; font-size: 0.9em;"> — 官方云上版</span>
+      <span style="color: #d8dee4;"> &nbsp;·&nbsp; </span>
+      <a href="https://www.youtube.com/watch?v=tNAZ9uMiUUw"><strong>视频演示</strong></a>
+      <span style="color: #d8dee4;"> &nbsp;·&nbsp; </span>
+      <a href="https://www.quantdinger.com"><strong>官网</strong></a>
+      <span style="color: #d8dee4;"> &nbsp;·&nbsp; </span>
+      <a href="https://aws.amazon.com/marketplace/pp/prodview-naanrb7d2mbc6"><strong>AWS Marketplace</strong></a><span style="color: #656d76; font-size: 0.9em;"> — AMI</span>
+    </p>
+    <p style="margin: 0 0 10px; color: #656d76; font-size: 12px; letter-spacing: 0.1em; font-weight: 600;">社区与联系</p>
+    <p style="margin: 0; line-height: 2;">
+      <a href="https://t.me/quantdinger"><img src="https://img.shields.io/badge/Telegram-Join-26A5E4?style=flat-square&logo=telegram&logoColor=white" alt="Telegram"></a>
+      &nbsp;
+      <a href="https://discord.com/invite/tyx5B6TChr"><img src="https://img.shields.io/badge/Discord-Server-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord"></a>
+      &nbsp;
+      <a href="https://youtube.com/@quantdinger"><img src="https://img.shields.io/badge/YouTube-%40quantdinger-FF0000?style=flat-square&logo=youtube&logoColor=white" alt="YouTube"></a>
+    </p>
+  </div>
 
-  <p style="margin-top: 1rem;">
+  <p style="margin-top: 1.45rem; margin-bottom: 10px;">
     <a href="../LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square&logo=apache" alt="License"></a>
     <img src="https://img.shields.io/badge/Version-3.0.3-orange?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/Python-3.10%2B%20%7C%20Docker%20镜像%203.12-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
     <img src="https://img.shields.io/badge/Docker-Compose%20Ready-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
-    <a href="https://aws.amazon.com/marketplace/pp/prodview-naanrb7d2mbc6"><img src="https://img.shields.io/badge/AWS%20Marketplace-QuantDinger%20AMI%20%28CentOS%209%29-232F3E?style=flat-square&logo=amazonaws&logoColor=white" alt="通过 AWS Marketplace 部署（ThinkCloud CentOS 9 AMI）"></a>
     <img src="https://img.shields.io/badge/Frontend-预构建-1f8b4c?style=flat-square" alt="Frontend">
     <img src="https://img.shields.io/github/stars/brokermr810/QuantDinger?style=flat-square&logo=github" alt="Stars">
+  </p>
+  <p style="margin: 10px 0 12px;">
+    <a href="https://aws.amazon.com/marketplace/pp/prodview-naanrb7d2mbc6"><img src="https://img.shields.io/badge/AWS%20Marketplace-AMI%20%7C%20CentOS%209-232F3E?style=flat-square&logo=amazonaws&logoColor=white" alt="通过 AWS Marketplace 部署（ThinkCloud CentOS 9 AMI）"></a>
+  </p>
+  <p style="margin: 12px 0 10px;">
     <a href="https://oosmetrics.com/repo/brokermr810/QuantDinger"><img src="https://api.oosmetrics.com/api/v1/badge/achievement/4991ab54-52d2-46d4-a03a-67b47b61ae4b.svg" alt="oosmetrics — Training 类加速性能第 7 名（2026-04-25）"></a>
   </p>
-
-  <p>
+  <p style="margin-top: 14px;">
     <a href="https://www.producthunt.com/products/quantdinger/launches/quantdinger?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-quantdinger" target="_blank" rel="noopener noreferrer"><img alt="QuantDinger — 本地优先的开源 AI 量化工作台 | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1057439&amp;theme=light&amp;t=1777556016131"></a>
   </p>
 </div>
