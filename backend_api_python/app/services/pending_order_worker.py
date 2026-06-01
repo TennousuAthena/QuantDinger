@@ -25,7 +25,10 @@ from app.services.live_trading.records import (
     record_trade,
     strategy_allowed_symbols,
 )
-from app.services.live_trading.strategy_position_sync import apply_exchange_snapshot_to_strategy_ledger
+from app.services.live_trading.strategy_position_sync import (
+    apply_exchange_snapshot_to_strategy_ledger,
+    strategy_uses_fill_ledger,
+)
 from app.services.live_trading.account_positions import (
     account_legs_from_exchange_maps,
     sync_account_positions,
@@ -141,6 +144,29 @@ def _set_position_sync_snapshot(
         )
 
 
+def invalidate_position_sync_snapshot(cache_key: str) -> None:
+    """Drop cached exchange position snapshot (e.g. after a fill)."""
+    with _position_sync_cache_lock:
+        _position_sync_snapshot_cache.pop(str(cache_key or ""), None)
+
+
+def invalidate_position_sync_snapshot_for_exchange(
+    *,
+    user_id: int,
+    exchange_id: str,
+    market_type: str,
+    exchange_config: Dict[str, Any],
+) -> None:
+    invalidate_position_sync_snapshot(
+        _position_sync_cache_key(
+            int(user_id or 1),
+            str(exchange_id or "").strip().lower(),
+            str(market_type or "swap").strip().lower(),
+            exchange_config if isinstance(exchange_config, dict) else {},
+        )
+    )
+
+
 def _persist_strategy_fill(
     *,
     strategy_id: int,
@@ -196,6 +222,17 @@ def _persist_strategy_fill(
         grid_matched_profit=grid_matched_profit if grid_matched_profit is not None else profit,
         leg=leg,
     )
+    try:
+        from app.services.live_trading.records import _get_user_id_from_strategy
+
+        invalidate_position_sync_snapshot_for_exchange(
+            user_id=_get_user_id_from_strategy(int(strategy_id)),
+            exchange_id=str(exchange_config.get("exchange_id") or "").strip().lower(),
+            market_type=str(market_type or "swap"),
+            exchange_config=exchange_config if isinstance(exchange_config, dict) else {},
+        )
+    except Exception:
+        pass
     return profit, matched_entry_price
 
 
@@ -407,9 +444,9 @@ class PendingOrderWorker:
                     or (sc.get("trading_config") or {}).get("bot_type")
                     or ""
                 ).strip().lower()
-                if bot_type == "grid":
+                if strategy_uses_fill_ledger(sc):
                     logger.debug(
-                        "[PositionSync] Strategy %s skipped: grid bot uses fill ledger (L3)",
+                        "[PositionSync] Strategy %s skipped: fill-ledger strategy (L3)",
                         sid,
                     )
                     continue

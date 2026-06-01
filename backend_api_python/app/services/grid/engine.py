@@ -484,23 +484,60 @@ class GridEngine:
             persist_grid_resting_state(self.strategy_id, {"initial_market_done": True})
         return ok
 
+    def _cell_state_by_index(self) -> Dict[int, GridCellState]:
+        rows = self._cells.list_cells(self.strategy_id, self.symbol)
+        out: Dict[int, GridCellState] = {}
+        for row in rows or []:
+            try:
+                out[int(row.cell_index)] = GridCellState.parse(row.state)
+            except Exception:
+                continue
+        return out
+
+    def _cell_allows_entry(self, cell_index: int, purpose: str, cell_states: Dict[int, GridCellState]) -> bool:
+        """Only IDLE cells without a paired exit/entry working order may get a new entry limit."""
+        idx = int(cell_index)
+        st = cell_states.get(idx, GridCellState.IDLE)
+        if purpose == "long_entry":
+            if st != GridCellState.IDLE:
+                return False
+            if self._orders.has_open_for_cell(self.strategy_id, idx, "long_entry"):
+                return False
+            if self._orders.has_open_for_cell(self.strategy_id, idx, "long_exit"):
+                return False
+            return True
+        if purpose == "short_entry":
+            if st != GridCellState.IDLE:
+                return False
+            if self._orders.has_open_for_cell(self.strategy_id, idx, "short_entry"):
+                return False
+            if self._orders.has_open_for_cell(self.strategy_id, idx, "short_exit"):
+                return False
+            return True
+        return False
+
     def sync_grid_orders(self, current_price: float) -> int:
         if not self._bootstrapped or self._paused_entries or current_price <= 0:
             return 0
         if self._runtime_params.get("waterfall_pause"):
             return 0
+        self._dedupe_open_entry_orders("long_entry")
+        self._dedupe_open_entry_orders("short_entry")
         _, cells = self._levels_and_cells()
+        cell_states = self._cell_state_by_index()
         placed = 0
         direction = self.cfg.grid_direction
         for cell in cells:
             if direction in ("long", "neutral") and cell.lower_price < current_price:
-                if not self._orders.has_open_for_cell(self.strategy_id, cell.index, "long_entry"):
+                if self._cell_allows_entry(cell.index, "long_entry", cell_states):
                     if self._place_limit(cell, "long_entry", "buy", cell.lower_price, reduce_only=False, pos_side="long"):
                         placed += 1
+                        cell_states[int(cell.index)] = GridCellState.BUY_OPEN
             if direction in ("short", "neutral") and cell.upper_price > current_price:
-                if not self._orders.has_open_for_cell(self.strategy_id, cell.index, "short_entry"):
+                if self._cell_allows_entry(cell.index, "short_entry", cell_states):
                     if self._place_limit(cell, "short_entry", "sell", cell.upper_price, reduce_only=False, pos_side="short"):
                         placed += 1
+                        cell_states[int(cell.index)] = GridCellState.SELL_OPEN
         return placed
 
     def _active_cell_for_price(
@@ -579,6 +616,41 @@ class GridEngine:
         except Exception as e:
             logger.debug("grid normalize qty sid=%s: %s", self.strategy_id, e)
         return float(qty)
+
+    def _dedupe_open_entry_orders(self, purpose: str) -> None:
+        """Cancel duplicate open entry limits on the same cell (recovery from prior stacking)."""
+        by_cell: Dict[int, List[GridRestingOrder]] = {}
+        for order in self._orders.list_open(self.strategy_id):
+            if str(order.purpose or "") != purpose:
+                continue
+            by_cell.setdefault(int(order.cell_index), []).append(order)
+        for cell_idx, orders in by_cell.items():
+            if len(orders) <= 1:
+                continue
+            orders.sort(
+                key=lambda o: float(o.quantity or 0) - float(o.processed_fill_qty or 0),
+                reverse=True,
+            )
+            for extra in orders[1:]:
+                try:
+                    client = self._create_client()
+                    cancel_grid_order(
+                        client,
+                        symbol=self.symbol,
+                        market_type=self.cfg.market_type,
+                        exchange_order_id=extra.exchange_order_id,
+                        client_order_id=extra.client_order_id,
+                    )
+                except Exception as e:
+                    logger.debug("grid entry dedupe cancel sid=%s cell=%s: %s", self.strategy_id, cell_idx, e)
+                if extra.id:
+                    self._orders.update_status(int(extra.id), status="cancelled")
+                append_strategy_log(
+                    self.strategy_id,
+                    "warning",
+                    f"Grid deduped duplicate {purpose} on cell={cell_idx} "
+                    f"(kept largest entry, cancelled oid={extra.exchange_order_id or extra.client_order_id})",
+                )
 
     def _dedupe_open_exit_orders(self, purpose: str) -> None:
         """Cancel duplicate open exit limits on the same cell (recovery from prior stacking)."""
@@ -713,6 +785,13 @@ class GridEngine:
             return 0
 
         if self._orders.has_open_for_cell(self.strategy_id, target_cell.index, purpose):
+            return 0
+
+        cell_states = self._cell_state_by_index()
+        target_state = cell_states.get(int(target_cell.index), GridCellState.IDLE)
+        if direction == "long" and target_state == GridCellState.LONG_HELD:
+            return 0
+        if direction == "short" and target_state == GridCellState.SHORT_HELD:
             return 0
 
         grid_qty = self._grid_base_qty(px)
@@ -917,37 +996,45 @@ class GridEngine:
                 return
 
         if purpose == "long_entry":
+            exit_ok = False
             if not self._orders.has_open_for_cell(self.strategy_id, cell.index, "long_exit"):
-                ok = self._place_limit(
+                exit_ok = self._place_limit(
                     cell, "long_exit", "sell", cell.upper_price, reduce_only=True, pos_side="long", quantity=fq
                 )
-            else:
-                ok = False
-            if ok:
-                self._cells.update_state(
-                    self.strategy_id, self.symbol, cell.index, state=GridCellState.LONG_HELD, leg_size=fq, leg_entry_price=px
+            self._cells.update_state(
+                self.strategy_id, self.symbol, cell.index, state=GridCellState.LONG_HELD, leg_size=fq, leg_entry_price=px
+            )
+            if not exit_ok and not self._orders.has_open_for_cell(self.strategy_id, cell.index, "long_exit"):
+                append_strategy_log(
+                    self.strategy_id,
+                    "warning",
+                    f"Grid long_exit hang failed after entry fill cell={cell.index} @ {cell.upper_price:.4f}",
                 )
         elif purpose == "long_exit":
             if not self._paused_entries:
-                if not self._orders.has_open_for_cell(self.strategy_id, cell.index, "long_entry"):
+                if self._cell_allows_entry(cell.index, "long_entry", self._cell_state_by_index()):
                     self._place_limit(
                         cell, "long_entry", "buy", cell.lower_price, reduce_only=False, pos_side="long", quantity=fq
                     )
             self._cells.update_state(self.strategy_id, self.symbol, cell.index, state=GridCellState.IDLE, leg_size=0)
         elif purpose == "short_entry":
+            exit_ok = False
             if not self._orders.has_open_for_cell(self.strategy_id, cell.index, "short_exit"):
-                ok = self._place_limit(
+                exit_ok = self._place_limit(
                     cell, "short_exit", "buy", cell.lower_price, reduce_only=True, pos_side="short", quantity=fq
                 )
-            else:
-                ok = False
-            if ok:
-                self._cells.update_state(
-                    self.strategy_id, self.symbol, cell.index, state=GridCellState.SHORT_HELD, leg_size=fq, leg_entry_price=px
+            self._cells.update_state(
+                self.strategy_id, self.symbol, cell.index, state=GridCellState.SHORT_HELD, leg_size=fq, leg_entry_price=px
+            )
+            if not exit_ok and not self._orders.has_open_for_cell(self.strategy_id, cell.index, "short_exit"):
+                append_strategy_log(
+                    self.strategy_id,
+                    "warning",
+                    f"Grid short_exit hang failed after entry fill cell={cell.index} @ {cell.lower_price:.4f}",
                 )
         elif purpose == "short_exit":
             if not self._paused_entries:
-                if not self._orders.has_open_for_cell(self.strategy_id, cell.index, "short_entry"):
+                if self._cell_allows_entry(cell.index, "short_entry", self._cell_state_by_index()):
                     self._place_limit(
                         cell, "short_entry", "sell", cell.upper_price, reduce_only=False, pos_side="short", quantity=fq
                     )

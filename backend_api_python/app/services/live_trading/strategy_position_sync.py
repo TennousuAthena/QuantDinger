@@ -22,6 +22,28 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_FILL_LEDGER_BOT_TYPES = frozenset({"grid", "martingale", "dca"})
+
+
+def strategy_uses_fill_ledger(strategy_config: Dict[str, Any]) -> bool:
+    """
+    Strategies whose L3 ledger is maintained by fill application, not exchange
+    reconciliation. Exchange sync can delete rows when API/cache lag behind fills.
+    """
+    sc = strategy_config if isinstance(strategy_config, dict) else {}
+    tc = sc.get("trading_config") if isinstance(sc.get("trading_config"), dict) else {}
+    bot_type = str(
+        sc.get("bot_type") or tc.get("bot_type") or ""
+    ).strip().lower()
+    if bot_type == "grid":
+        return True
+    stype = str(sc.get("strategy_type") or "").strip()
+    if stype != "ScriptStrategy":
+        return False
+    if bot_type in _FILL_LEDGER_BOT_TYPES:
+        return False
+    return True
+
 
 def apply_exchange_snapshot_to_strategy_ledger(
     *,
@@ -98,7 +120,16 @@ def apply_exchange_snapshot_to_strategy_ledger(
 
 def sync_strategy_positions_from_exchange(strategy_id: int) -> None:
     """On-demand exchange → L3 sync for one strategy (positions API / startup)."""
+    from app.services.exchange_execution import load_strategy_configs
     from app.services.pending_order_worker import PendingOrderWorker
+
+    sc = load_strategy_configs(int(strategy_id))
+    if strategy_uses_fill_ledger(sc):
+        logger.debug(
+            "position sync skipped for strategy %s: fill-ledger strategy",
+            strategy_id,
+        )
+        return
 
     worker = PendingOrderWorker()
     worker._sync_positions_best_effort(target_strategy_id=int(strategy_id))
